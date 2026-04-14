@@ -2,8 +2,8 @@
 const TelegramBot = require('node-telegram-bot-api');
 require('dotenv').config();
 
-const TOKEN = '7809701198:AAH786YvP7t21xL277GZ6UuH_v8_3X6G94A'; // Token from .env
-const CHAT_ID = '8738897792'; // User's test ID
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN; 
+const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 async function test() {
   console.log(`📡 Testing Telegram Token: ${TOKEN}`);

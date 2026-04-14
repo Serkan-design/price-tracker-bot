@@ -1,5 +1,12 @@
 # Premium Price Tracker Bot 📉
 
+<p align="center">
+  <a href="https://fiyat.srkn77.shop">
+    <img src="https://img.shields.io/badge/Live-Demo-purple?style=for-the-badge">
+  </a>
+</p>
+
+
 A robust and scalable price tracking solution for popular e-commerce platforms (Trendyol, Hepsiburada, Amazon, N11, Itopya). This bot utilizes **Gemini AI (Flash)** for intelligent price extraction and provides real-time notifications via **Telegram**.
 
 ---

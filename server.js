@@ -14,7 +14,7 @@ const ai = require("./ai");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || "fiyat_botu_gizli_anahtar_2026";
+const JWT_SECRET = process.env.JWT_SECRET;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 // Paths
@@ -125,13 +125,14 @@ app.post("/api/register", async (req, res) => {
 
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
-  const ADMIN_PASS = process.env.ADMIN_PASSWORD || "admin123";
+  const ADMIN_PASS = process.env.ADMIN_PASSWORD;
 
   try {
     // 1. Check for Master Admin Password (fallback/emergency override)
-    if (password === ADMIN_PASS) {
-      const adminUser = (email === "serkanisik67@gmail.com" || !email) 
-        ? { email: email || "admin@fiyatbot.com", name: "Serkan (Sistem Yöneticisi)" }
+    if (ADMIN_PASS && password === ADMIN_PASS) {
+      const adminEmail = process.env.ADMIN_EMAIL || "admin@fiyatbot.com";
+      const adminUser = (email === adminEmail || !email) 
+        ? { email: email || adminEmail, name: "Sistem Yöneticisi" }
         : null;
       
       if (adminUser) {
