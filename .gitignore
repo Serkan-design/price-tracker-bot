@@ -1,0 +1,27 @@
+# Hassas Dosyalar (ASLA PAYLAŞILMAMALI)
+.env
+serviceAccountKey.json
+
+# Bağımlılıklar
+node_modules/
+panel/node_modules/
+
+# Debug ve Test Çıktıları
+debug_*
+!debug_scraper.js
+!debug_trendyol.js
+test_out*.txt
+server_error.txt
+*.log
+
+# Build Çıktıları
+panel/dist*/
+panel/build/
+
+# Sistem ve Editör Dosyaları
+.DS_Store
+.vscode/
+.idea/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
