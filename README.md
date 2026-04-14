@@ -6,11 +6,11 @@ A robust and scalable price tracking solution for popular e-commerce platforms (
 
 ## 📷 Screenshots
 
-### Dashboard
-![Dashboard Interface](docs/screenshots/dashboard.png)
-
 ### Login Page
 ![Login Interface](docs/screenshots/login.png)
+
+### Dashboard
+![Dashboard Interface](docs/screenshots/dashboard.png)
 
 ---
 
