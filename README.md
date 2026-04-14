@@ -1,8 +1,20 @@
-# Premium Price Tracker Bot ğŸ“ˆ
+# Premium Price Tracker Bot 📉
 
 A robust and scalable price tracking solution for popular e-commerce platforms (Trendyol, Hepsiburada, Amazon, N11, Itopya). This bot utilizes **Gemini AI (Flash)** for intelligent price extraction and provides real-time notifications via **Telegram**.
 
-## ğŸš€ Features
+---
+
+## 📷 Screenshots
+
+### Dashboard
+![Dashboard Interface](docs/screenshots/dashboard.png)
+
+### Login Page
+![Login Interface](docs/screenshots/login.png)
+
+---
+
+## 🚀 Features
 
 - **AI-Powered Extraction**: Uses Google Gemini Flash to accurately find prices in complex HTML structures.
 - **Multi-Platform Support**: Seamlessly track products across multiple marketplaces.
@@ -12,7 +24,7 @@ A robust and scalable price tracking solution for popular e-commerce platforms (
 
 ---
 
-## ğŸ”’ Security & Setup (IMPORTANT)
+## 🔒 Security & Setup (IMPORTANT)
 
 For security reasons, sensitive configuration files are **not** included in this repository. You must set them up manually before running the application.
 
@@ -41,7 +53,7 @@ This project uses Firebase Firestore.
 
 ---
 
-## ğŸ“¦ Installation
+## 📦 Installation
 
 ### Prerequisites
 - Node.js (v18 or higher)
@@ -51,7 +63,7 @@ This project uses Firebase Firestore.
 
 1.  **Clone the Repository**
     ```bash
-    git clone https://github.com/yourusername/price-tracker-bot.git
+    git clone https://github.com/Serkan-design/price-tracker-bot.git
     cd price-tracker-bot
     ```
 
@@ -85,16 +97,17 @@ This project uses Firebase Firestore.
 
 ---
 
-## ğŸ› ï¸ Project Structure
+## 🛠️ Project Structure
 
 - `/panel`: React-based Admin Dashboard.
 - `/engine`: Core logic for scraping, analysis, and notifications.
 - `/scrapers`: Platform-specific scraping scripts.
+- `/tests`: Test scripts and debugging tools.
 - `server.js`: Express API server and Cron Job manager.
 - `ai.js`: Gemini AI integration logic.
 
-## ğŸ’¬ Information for Contributors
-If you find any bugs or want to add a new platform, feel free to open a Pull Request. Experimental debug scripts are available in the root for testing new scrapers.
+## 💬 Information for Contributors
+If you find any bugs or want to add a new platform, feel free to open a Pull Request. Experimental debug scripts are available in the `/tests` folder for testing new scrapers.
 
 ---
 

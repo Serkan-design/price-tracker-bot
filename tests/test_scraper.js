@@ -1,4 +1,4 @@
-const scraper = require("./scraper");
+const scraper = require("../scraper");
 const url = "https://www.trendyol.com/samsung/16gb-ddr4-3200mhz-cl22-notebook-ram-m471a2k43eb1-cwe-p-709595347";
 
 async function test() {

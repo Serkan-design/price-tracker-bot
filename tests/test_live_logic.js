@@ -1,5 +1,5 @@
 require("dotenv").config();
-const scraper = require("./scraper");
+const scraper = require("../scraper");
 
 async function test() {
   const tests = [

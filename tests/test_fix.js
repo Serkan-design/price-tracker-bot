@@ -1,4 +1,4 @@
-const scraper = require("./scraper");
+const scraper = require("../scraper");
 
 async function test() {
   const url = "https://www.trendyol.com/apple/iphone-15-128gb-siyah-p-766731112";

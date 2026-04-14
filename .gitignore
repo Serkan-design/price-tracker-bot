@@ -8,9 +8,8 @@ panel/node_modules/
 
 # Debug ve Test Çıktıları
 debug_*
-!debug_scraper.js
-!debug_trendyol.js
 test_out*.txt
+tests/test_out*.txt
 server_error.txt
 *.log
 
