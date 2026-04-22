@@ -25,14 +25,30 @@ const DB = {
   },
 
   async loginUser(email, password) {
-    if (!db) return null;
-    const userRef = db.collection(USERS_COLLECTION).doc(email);
-    const doc = await userRef.get();
-    if (!doc.exists) return null;
-    
-    const user = doc.data();
-    const isMatch = await bcrypt.compare(password, user.password);
-    return isMatch ? { email: user.email, name: user.name, telegramChatId: user.telegramChatId } : null;
+    if (!db) {
+      console.error("[DB ERROR] Firebase not initialized");
+      return null;
+    }
+    try {
+      const userRef = db.collection(USERS_COLLECTION).doc(email);
+      const doc = await userRef.get();
+      if (!doc.exists) {
+        console.warn(`[LOGIN] User not found: ${email}`);
+        return null;
+      }
+      
+      const user = doc.data();
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        console.warn(`[LOGIN] Password mismatch for: ${email}`);
+        return null;
+      }
+      console.log(`[LOGIN] Success: ${email}`);
+      return { email: user.email, name: user.name, telegramChatId: user.telegramChatId };
+    } catch (err) {
+      console.error(`[LOGIN ERROR] Exception for ${email}:`, err.message);
+      throw err;
+    }
   },
 
   async updateUserInfo(email, updates) {
