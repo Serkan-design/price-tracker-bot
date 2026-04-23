@@ -223,26 +223,37 @@ function TradingPanel({ token, analysis }) {
       {stats.currentPosition && (
         <div style={{ background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: '16px', marginBottom: 24 }}>
           <div style={{ fontSize: 12, color: '#f59e0b', fontWeight: 800, marginBottom: 8 }}>AKTİF POZİSYON</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <div>
               <span style={{ fontSize: 20, fontWeight: 900, color: '#f1f5f9' }}>BUY XAUUSD</span>
               <span style={{ marginLeft: 12, fontSize: 14, color: '#94a3b8' }}>Giriş: ${stats.currentPosition.entryPrice?.toFixed(2)}</span>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Lot: {stats.currentPosition.lotSize || 0.1} | Maliyet: ${(stats.currentPosition.cost || 0).toFixed(2)}</div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 18, fontWeight: 900, color: (analysis?.price && stats.currentPosition.entryPrice && (analysis.price - stats.currentPosition.entryPrice) >= 0) ? '#22c55e' : '#ef4444' }}>
-                {analysis?.price && stats.currentPosition.entryPrice ? (
-                  <>
-                    {(analysis.price - stats.currentPosition.entryPrice) >= 0 ? '+' : ''}
-                    {(analysis.price - stats.currentPosition.entryPrice).toFixed(2)}$
-                    <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.8 }}>
-                      ({Math.round((analysis.price - stats.currentPosition.entryPrice) * 32.5)} TL)
-                    </span>
-                  </>
-                ) : 'Hesaplanıyor...'}
+              {/* Gerçek zamanlı PNL: sunucudan gelen unrealizedPnlTl değerini kullan */}
+              {stats.unrealizedPnlTl !== undefined ? (
+                <div style={{ fontSize: 18, fontWeight: 900, color: stats.unrealizedPnlTl >= 0 ? '#22c55e' : '#ef4444' }}>
+                  {stats.unrealizedPnlTl >= 0 ? '+' : ''}{stats.unrealizedPnlTl} TL
+                  <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.8 }}>
+                    ({stats.unrealizedPnl >= 0 ? '+' : ''}{stats.unrealizedPnl?.toFixed(2)}$)
+                  </span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 18, fontWeight: 900, color: '#94a3b8' }}>Hesaplanıyor...</div>
+              )}
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Anlık Kâr/Zarar</div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                Min. satış eşiği: {stats.minProfitTl || 300} TL
               </div>
-              <div style={{ fontSize: 11, color: '#94a3b8' }}>Anlık Kâr/Zarar</div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Cooldown bilgisi */}
+      {!stats.currentPosition && stats.cooldownRemaining > 0 && (
+        <div style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 10, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#a5b4fc', fontWeight: 700 }}>
+          ⏳ Sonraki alım için bekleniyor: {stats.cooldownRemaining} saniye
         </div>
       )}
 

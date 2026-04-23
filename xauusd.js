@@ -25,17 +25,30 @@ let alertConfig = {
   }
 };
 
+// ──────────────────────────────────────────────────
+// STRATEJI AYARLARI
+// LOT BAZLI sistem: 1 lot = altın fiyatı / 10 birim
+// Örn: Altın $3300 ise 1 lot = $330 maliyet
+// Kaldıraç simülasyonu: gerçek maliyet / 10 ile aç
+// ──────────────────────────────────────────────────
+const MIN_PROFIT_TL = 300;        // Minimum 300 TL kâr olmadan satma
+const TL_RATE = 32.5;             // 1 USD = 32.5 TL (yaklaşık)
+const LOT_SIZE = 0.1;             // 0.1 lot işlem büyüklüğü
+const TARGET_PROFIT_USD = 9.23;   // 300 TL / 32.5 = ~$9.23 hedef
+const STOP_LOSS_USD = 15.0;       // $15 stop loss (~487 TL)
+const REBUY_COOLDOWN_MS = 60_000; // Satış sonrası 60 saniye bekleme süresi
+
 let tradingState = {
-  virtualBalance: 0, // Başlangıçta sıfır, 'Hesabı Sıfırla' ile 5000 olur.
+  virtualBalance: 0,        // Başlangıçta sıfır, 'Hesabı Sıfırla' ile 5000 olur.
   currentPosition: null, 
   totalProfit: 0, 
   dailyProfit: 0, 
   tradeHistory: [],
-  targetProfitUsd: 10.0,  // Hedef kâr artırıldı (User wants more)
-  stopLossUsd: 15.0,     // Stop loss artırıldı
   isEnabled: true,
   lastResetDate: new Date().toDateString(),
-  lastEntryPrice: null   // Hatırlanacak son giriş fiyatı
+  lastEntryPrice: null,     // Son giriş fiyatı (tekrar alım bandı için)
+  lastCloseTime: 0,         // Son satış zamanı (cooldown için)
+  waitingForRebuy: false,   // Satış sonrası alım bekliyor mu?
 };
 
 let _alertCallback = null;
@@ -450,8 +463,9 @@ let _interval = null;
 
 function executeStrategy(analysis) {
   if (!analysis || !tradingState.isEnabled) return;
-  
-  // Daily profit reset check
+  if (tradingState.virtualBalance <= 0) return; // Bakiye yoksa işlem yapma
+
+  // Günlük kâr sıfırlama kontrolü
   const today = new Date().toDateString();
   if (tradingState.lastResetDate !== today) {
     tradingState.dailyProfit = 0;
@@ -460,62 +474,77 @@ function executeStrategy(analysis) {
 
   const { price, signal, confidence, rsi, trend } = analysis;
 
-  // 1. Check for Exit if we have a position
+  // ── 1. AÇIK POZİSYON VARSA ÇIKIŞ KOŞULLARINI KONTROL ET ──
   if (tradingState.currentPosition) {
     const pos = tradingState.currentPosition;
-    const pnl = (price - pos.entryPrice); // Profit/Loss per unit
-    
-    const pnlTl = pnl * 32.5;
-    const isProfitEnough = pnlTl >= 100; // Kullanıcının istediği minimum 100 TL kâr
+    // LOT BAZLI kâr/zarar: fiyat farkı x lot büyüklüğü x kaldıraç (100 birim)
+    const priceDiff = price - pos.entryPrice;   // $/oz fark
+    const pnl = priceDiff * pos.lotSize * 100;  // Gerçek USD kâr/zarar
+    const pnlTl = pnl * TL_RATE;
 
-    const shouldSell = 
-      pnl >= tradingState.targetProfitUsd || // Target hit ($10)
-      pnl <= -tradingState.stopLossUsd ||    // Stop loss hit ($15)
+    // Minimum 300 TL kar olmadan satma (stop loss hariç)
+    const isProfitEnough = pnlTl >= MIN_PROFIT_TL;
+    // Stop loss: $15 kayıp (~487 TL)
+    const isStopLoss = pnl <= -STOP_LOSS_USD;
+
+    const shouldSell =
+      isStopLoss ||                                              // Stop loss zorunlu çıkış
+      (pnl >= TARGET_PROFIT_USD && isProfitEnough) ||           // Hedef kâra ulaşıldı
       (pos.type === 'BUY' && signal === 'SELL' && confidence >= 65 && isProfitEnough) || // Ters sinyal + min kâr
-      (pos.type === 'BUY' && rsi >= 75 && isProfitEnough); // Aşırı alım + min kâr
+      (pos.type === 'BUY' && rsi >= 78 && isProfitEnough);    // Aşırı alım + min kâr
 
     if (shouldSell) {
-      const finalPnl = pnl;
-      tradingState.totalProfit += finalPnl;
-      tradingState.dailyProfit += finalPnl;
-      
-      // Realism: Add full price back to balance
-      tradingState.virtualBalance += price; 
-      
+      tradingState.totalProfit += pnl;
+      tradingState.dailyProfit += pnl;
+      tradingState.virtualBalance += pos.cost + pnl; // Maliyet + kâr/zarar geri döner
+      tradingState.lastCloseTime = Date.now();
+      tradingState.waitingForRebuy = true; // Satış sonrası tekrar alım bekle
+
       const trade = {
         ...pos,
         exitPrice: price,
         exitTime: new Date().toISOString(),
-        pnl: finalPnl,
-        pnlTl: Math.round(finalPnl * 32.5),
-        result: finalPnl > 0 ? 'WIN' : 'LOSS'
+        pnl: parseFloat(pnl.toFixed(2)),
+        pnlTl: Math.round(pnlTl),
+        result: pnl > 0 ? 'WIN' : 'LOSS'
       };
-      
+
       tradingState.tradeHistory.push(trade);
       if (tradingState.tradeHistory.length > 50) tradingState.tradeHistory.shift();
-      
       tradingState.currentPosition = null;
-      
-      fireAlert('TRADE_CLOSED', { 
-        message: `🤖 <b>İşlem Kapandı!</b>\n\nPNL: ${finalPnl.toFixed(2)}$ (${trade.pnlTl} TL)\nBakiye: ${tradingState.virtualBalance.toFixed(2)}$\nFiyat: $${price.toFixed(2)}`,
-        pnl: finalPnl,
-        price
+
+      const emoji = pnl > 0 ? '✅' : '🔴';
+      fireAlert('TRADE_CLOSED', {
+        message: `🤖 <b>İşlem Kapandı! ${emoji}</b>\n\nPNL: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}$ (${pnlTl >= 0 ? '+' : ''}${Math.round(pnlTl)} TL)\nBakiye: $${tradingState.virtualBalance.toFixed(2)}\nFiyat: $${price.toFixed(2)}`,
+        pnl, price
       });
+
+      console.log(`[TRADING] Pozisyon kapatıldı. PNL: $${pnl.toFixed(2)} (${Math.round(pnlTl)} TL) | Bakiye: $${tradingState.virtualBalance.toFixed(2)}`);
     }
-  } else {
-    // 2. Giriş Şartı (SADECE pozisyon yokken - else bloğu içinde)
-    const isPriceRight = !tradingState.lastEntryPrice || price <= (tradingState.lastEntryPrice + 0.5);
+    return; // Açık pozisyon varken alım yapma
+  }
 
-    const shouldBuy = 
-      signal === 'BUY' && 
-      confidence >= 70 && 
-      trend === 'UP' && 
-      rsi < 45 &&
-      isPriceRight;
+  // ── 2. POZİSYON YOKSA ALIŞ KOŞULLARINI KONTROL ET ──
+  const now = Date.now();
+  const cooldownOk = (now - tradingState.lastCloseTime) >= REBUY_COOLDOWN_MS;
 
-    if (shouldBuy && tradingState.virtualBalance >= price) {
-      console.log(`[TRADING] Giriş yapılıyor: Fiyat=${price}, Beklenen Band=${tradingState.lastEntryPrice}`);
+  if (!cooldownOk) return; // Cooldown devam ediyor
+  tradingState.waitingForRebuy = false;
+
+  const shouldBuy =
+    signal === 'BUY' &&
+    confidence >= 65 &&        // Eşiği biraz düşürdük ki daha aktif işlem yapsın
+    (trend === 'UP' || rsi <= 35) && // UP trend VEYA aşırı satım
+    rsi < 55;                  // RSI orta bölgenin altında
+
+  if (shouldBuy) {
+    // LOT maliyeti: fiyatın sadece %1'i (kaldıraç simülasyonu)
+    const lotCost = price * LOT_SIZE; // ~$330 (altın $3300'da 0.1 lot)
+    if (tradingState.virtualBalance >= lotCost) {
+      console.log(`[TRADING] Alım sinyali! Fiyat=$${price} | Sinyal=${signal} | Güven=${confidence}% | RSI=${rsi} | Trend=${trend}`);
       openPosition('BUY', price);
+    } else {
+      console.warn(`[TRADING] Yetersiz bakiye: $${tradingState.virtualBalance.toFixed(2)} < $${lotCost.toFixed(2)} (lot maliyeti)`);
     }
   }
 }
@@ -523,25 +552,31 @@ function executeStrategy(analysis) {
 function openPosition(type, price) {
   try {
     if (tradingState.currentPosition) return { success: false, message: "Zaten açık bir pozisyonunuz var." };
-    if (tradingState.virtualBalance < price) return { success: false, message: "Yetersiz bakiye! Lütfen Likidite Yükleyin." };
-  
-    const entryCost = price + 0.3; 
-    tradingState.virtualBalance -= entryCost;
+
+    // LOT BAZLI maliyet: 0.1 lot, kaldıraçlı sistem
+    const lotCost = price * LOT_SIZE; // fiyat x lot büyüklüğü (~$330)
+    if (tradingState.virtualBalance < lotCost) {
+      return { success: false, message: `Yetersiz bakiye! Gerekli: $${lotCost.toFixed(2)}, Mevcut: $${tradingState.virtualBalance.toFixed(2)}` };
+    }
+
+    tradingState.virtualBalance -= lotCost; // Sadece lot maliyetini düş
+    tradingState.lastEntryPrice = price;
 
     tradingState.currentPosition = {
       entryPrice: price,
       type: type,
+      lotSize: LOT_SIZE,
+      cost: lotCost,           // Geri ödeme için maliyeti sakla
       time: new Date().toISOString(),
-      amount: 1
     };
-    
-    // Girilen fiyatı hafızaya al (Tekrar bu banda düşünce almak için)
-    tradingState.lastEntryPrice = price;
-    
+
+    const expectedProfitTl = TARGET_PROFIT_USD * TL_RATE;
     fireAlert('TRADE_OPENED', {
-      message: `🤖 <b>İşlem Açıldı (${type})!</b>\n\nGiriş: $${price.toFixed(2)}\nBakiye: $${tradingState.virtualBalance.toFixed(2)}`,
+      message: `🤖 <b>İşlem Açıldı (${type})!</b>\n\nGiriş: $${price.toFixed(2)}\nLot: ${LOT_SIZE} | Maliyet: $${lotCost.toFixed(2)}\nHedef Kâr: ~${Math.round(expectedProfitTl)} TL\nBakiye: $${tradingState.virtualBalance.toFixed(2)}`,
       price
     });
+
+    console.log(`[TRADING] Pozisyon açıldı: ${type} @ $${price.toFixed(2)} | Lot: ${LOT_SIZE} | Maliyet: $${lotCost.toFixed(2)} | Bakiye: $${tradingState.virtualBalance.toFixed(2)}`);
     return { success: true, message: "İşlem başarıyla açıldı!" };
   } catch (err) {
     console.error("[TRADING ERROR] Failed to open position:", err.message);
@@ -551,37 +586,37 @@ function openPosition(type, price) {
 
 function closePositionManual(price) {
   if (!tradingState.currentPosition) return { success: false, message: "Açık pozisyon bulunamadı." };
-  
+
   const pos = tradingState.currentPosition;
-  const pnl = (price - pos.entryPrice);
-  
+  const priceDiff = price - pos.entryPrice;
+  const pnl = priceDiff * (pos.lotSize || LOT_SIZE) * 100; // LOT BAZLI kâr/zarar
+  const pnlTl = Math.round(pnl * TL_RATE);
+
   tradingState.totalProfit += pnl;
   tradingState.dailyProfit += pnl;
-  
-  // Realism: Give back the entry price + profit/loss
-  tradingState.virtualBalance += price; 
-  
+  tradingState.virtualBalance += pos.cost + pnl; // Maliyet + kâr/zarar geri döner
+  tradingState.lastCloseTime = Date.now();
+
   const trade = {
     ...pos,
     exitPrice: price,
     exitTime: new Date().toISOString(),
-    pnl: pnl,
-    pnlTl: Math.round(pnl * 32.5),
+    pnl: parseFloat(pnl.toFixed(2)),
+    pnlTl,
     result: pnl > 0 ? 'WIN' : 'LOSS',
     manual: true
   };
-  
+
   tradingState.tradeHistory.push(trade);
   if (tradingState.tradeHistory.length > 50) tradingState.tradeHistory.shift();
-  
   tradingState.currentPosition = null;
-  
-  fireAlert('TRADE_CLOSED', { 
-    message: `🤖 <b>İşlem El ile Kapatıldı!</b>\n\nPNL: ${pnl.toFixed(2)}$ (${trade.pnlTl} TL)\nFiyat: $${price.toFixed(2)}`,
-    pnl: pnl,
-    price
+
+  fireAlert('TRADE_CLOSED', {
+    message: `🤖 <b>İşlem El ile Kapatıldı!</b>\n\nPNL: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}$ (${pnlTl >= 0 ? '+' : ''}${pnlTl} TL)\nBakiye: $${tradingState.virtualBalance.toFixed(2)}\nFiyat: $${price.toFixed(2)}`,
+    pnl, price
   });
-  
+
+  console.log(`[TRADING] Manuel kapatma. PNL: $${pnl.toFixed(2)} (${pnlTl} TL) | Bakiye: $${tradingState.virtualBalance.toFixed(2)}`);
   return { success: true, message: "Pozisyon el ile kapatıldı." };
 }
 
@@ -637,10 +672,29 @@ function setAlertLevels({ support = [], resistance = [], spikeThreshold, dropThr
 }
 
 function getTradingStats() {
+  // Eğer açık pozisyon varsa gerçek zamanlı PNL hesapla
+  let unrealizedPnl = 0;
+  let unrealizedPnlTl = 0;
+  if (tradingState.currentPosition) {
+    // Son fiyatı xauusd modülünden al (priceHistory'den)
+    const lastP = priceHistory.length > 0 ? priceHistory[priceHistory.length - 1].price : null;
+    if (lastP) {
+      const diff = lastP - tradingState.currentPosition.entryPrice;
+      unrealizedPnl = diff * (tradingState.currentPosition.lotSize || LOT_SIZE) * 100;
+      unrealizedPnlTl = Math.round(unrealizedPnl * TL_RATE);
+    }
+  }
+
   return {
     ...tradingState,
-    totalProfitTl: Math.round(tradingState.totalProfit * 32.5),
-    dailyProfitTl: Math.round(tradingState.dailyProfit * 32.5),
+    totalProfitTl: Math.round(tradingState.totalProfit * TL_RATE),
+    dailyProfitTl: Math.round(tradingState.dailyProfit * TL_RATE),
+    unrealizedPnl: parseFloat(unrealizedPnl.toFixed(2)),
+    unrealizedPnlTl,
+    minProfitTl: MIN_PROFIT_TL,
+    lotSize: LOT_SIZE,
+    tlRate: TL_RATE,
+    cooldownRemaining: Math.max(0, Math.ceil((REBUY_COOLDOWN_MS - (Date.now() - tradingState.lastCloseTime)) / 1000)),
   };
 }
 
@@ -651,6 +705,10 @@ function resetTradingStats() {
   tradingState.dailyProfit = 0;
   tradingState.tradeHistory = [];
   tradingState.lastResetDate = new Date().toDateString();
+  tradingState.lastEntryPrice = null;
+  tradingState.lastCloseTime = 0;
+  tradingState.waitingForRebuy = false;
+  console.log('[TRADING] Demo hesap sıfırlandı. Bakiye: $5000');
 }
 
 async function fetchAndAnalyze() {

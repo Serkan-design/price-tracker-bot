@@ -42,15 +42,26 @@ const launchOptions = {
     "--disable-renderer-backgrounding",
     "--disable-backgrounding-occluded-windows",
   ],
+  protocolTimeout: 60000,
 };
 
-// Linux'ta ek flagler gerekli (snap Chromium uyumu için)
+// Linux'ta ek flagler gerekli (snap Chromium / usr/bin uyumu için)
 if (process.platform === "linux") {
   launchOptions.args.push("--no-zygote", "--single-process");
-  const snapPath = "/snap/bin/chromium";
-  const binPath = "/usr/bin/chromium-browser";
-  if (require("fs").existsSync(snapPath)) launchOptions.executablePath = snapPath;
-  else if (require("fs").existsSync(binPath)) launchOptions.executablePath = binPath;
+  const fs = require("fs");
+  const chromiumPaths = [
+    "/usr/bin/chromium-browser",
+    "/snap/bin/chromium",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome",
+  ];
+  for (const p of chromiumPaths) {
+    if (fs.existsSync(p)) {
+      launchOptions.executablePath = p;
+      console.log(`[SCRAPER] Chromium yolu: ${p}`);
+      break;
+    }
+  }
 }
 
 
