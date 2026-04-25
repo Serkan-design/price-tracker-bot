@@ -23,6 +23,14 @@ function App() {
 
   return (
     <div className="app-container">
+      <div className="scanner-line"></div>
+      <div className="nebula nebula-1"></div>
+      <div className="nebula nebula-2"></div>
+      <div className="nebula nebula-3"></div>
+      <div className="nebula nebula-4"></div>
+      <div className="particle p1"></div>
+      <div className="particle p2"></div>
+      <div className="particle p3"></div>
       <Routes>
         <Route 
           path="/login" 
@@ -34,11 +42,6 @@ function App() {
         />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
-
-      {/* FIXED ASSETS AFTER CONTENT TO PREVENT FLOW SHIFT */}
-      <div className="bg-orb orb-1"></div>
-      <div className="bg-orb orb-2"></div>
-      <div className="noise"></div>
     </div>
   )
 }

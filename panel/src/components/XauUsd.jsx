@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios'
 import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, Bell, RefreshCw,
   Activity, BarChart2, Target, Zap, Shield, ChevronUp, ChevronDown, Info, PlayCircle, Clock, Trash2, Power,
-  DollarSign, TrendingUp as ProfitIcon, List as HistoryIcon
+  DollarSign, TrendingUp as ProfitIcon, List as HistoryIcon, Loader2
 } from 'lucide-react'
 
 const API = (path) => path
@@ -41,60 +41,277 @@ function TrendIcon({ trend, size = 20 }) {
   return <Minus size={size} color="#f59e0b" />
 }
 
-function ConfidenceBar({ value, text }) {
+const Sparkline = React.memo(({ data, color = "#6366f1", height = 40 }) => {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
+  const W = 100, H = height;
+  
+  const path = useMemo(() => {
+    const pts = data.map((p, i) => ({
+      x: (i / (data.length - 1)) * W,
+      y: H - ((p - min) / range) * (H - 4) - 2
+    }));
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const cp1x = (pts[i].x + pts[i+1].x) / 2;
+      d += ` C ${cp1x} ${pts[i].y}, ${cp1x} ${pts[i+1].y}, ${pts[i+1].x} ${pts[i+1].y}`;
+    }
+    return d;
+  }, [data, min, max, range, H]);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height, overflow: 'visible', filter: `drop-shadow(0 0 4px ${color}44)` }} preserveAspectRatio="none">
+      <path d={path} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+})
+
+const ConfidenceBar = React.memo(({ value, text }) => {
   const color = value >= 80 ? '#22c55e' : value >= 50 ? '#f59e0b' : '#ef4444'
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#94a3b8', marginBottom: 4, letterSpacing: '0.05em' }}>
-        <span>{text || 'Güven Skoru'}</span><span style={{ color, fontWeight: 700 }}>{value}%</span>
+    <div style={{ width: '100%', maxWidth: 200, willChange: 'contents' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#94a3b8', marginBottom: 4, fontWeight: 800 }}>
+        <span>{text || 'GÜVEN'}</span><span style={{ color }}>%{value}</span>
       </div>
-      <div style={{ height: 6, background: '#1e293b', borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${value}%`, background: color, borderRadius: 10, transition: 'width 1s ease' }} />
+      <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${value}%`, background: color, borderRadius: 10, transition: 'width 0.6s cubic-bezier(0.16, 1, 0.3, 1)', boxShadow: `0 0 10px ${color}44` }} />
       </div>
     </div>
   )
-}
+})
 
-function StatCard({ label, value, sub, accent = '#6366f1', icon, progress, className = "" }) {
+const StatCard = React.memo(({ label, value, sub, accent = '#6366f1', icon, progress, historyData, className = "" }) => {
   return (
-    <div className={className} style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${accent}33`, borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'relative', overflow: 'hidden' }}>
-      <div style={{ position: 'absolute', top: 16, right: 16, opacity: 0.15 }}>{icon}</div>
-      <div style={{ fontSize: '11px', color: '#cbd5e1', letterSpacing: '0.12em', fontWeight: 800 }}>{label}</div>
-      <div style={{ fontSize: '22px', fontWeight: 900, color: accent, lineHeight: 1 }}>{value}</div>
+    <div className={className} style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${accent}33`, borderRadius: '20px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '8px', position: 'relative', overflow: 'hidden', willChange: 'transform' }}>
+      <div style={{ position: 'absolute', top: 20, right: 20, width: 44, height: 44, borderRadius: 12, background: `${accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: accent }}>{icon}</div>
+      <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '0.12em', fontWeight: 800 }}>{label}</div>
+      <div style={{ fontSize: '26px', fontWeight: 900, color: '#fff', lineHeight: 1.2, margin: '4px 0' }}>{value}</div>
       {sub && <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>{sub}</div>}
+      
+      {historyData && (
+        <div style={{ marginTop: 12, height: 40, width: '100%' }}>
+          <Sparkline data={historyData} color={accent} />
+        </div>
+      )}
+
       {progress !== undefined && (
-        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)', marginTop: 4 }}>
-          <div style={{ height: '100%', width: `${progress}%`, background: accent }} />
+        <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', marginTop: 12, borderRadius: 10 }}>
+          <div style={{ height: '100%', width: `${progress}%`, background: accent, borderRadius: 10, boxShadow: `0 0 10px ${accent}` }} />
         </div>
       )}
     </div>
   )
-}
+})
 
-function MiniChart({ history }) {
-  if (!history || history.length < 2) {
-    return <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 13 }}>Grafik verisi analiz ediliyor...</div>
+const PremiumTerminal = React.memo(({ history, analysis, sig, flashClass, stats }) => {
+  const [timeframe, setTimeframe] = useState('1H');
+  const [hoverData, setHoverData] = useState(null);
+  const [showIndicators, setShowIndicators] = useState({ ema: true, sr: true });
+  const svgRef = useRef(null);
+
+  const slicedHistory = useMemo(() => {
+    if (!history) return [];
+    let points = history.length;
+    if (timeframe === '1H') points = 60;
+    else if (timeframe === '1D') points = 300;
+    else if (timeframe === '3D') points = 600;
+    else if (timeframe === '1W') points = 1200;
+    else if (timeframe === '1M') points = 2000;
+    return history.slice(-points);
+  }, [history, timeframe]);
+
+  const prices = useMemo(() => slicedHistory.map(h => h.price), [slicedHistory]);
+  const sLevels = useMemo(() => {
+    if (!analysis) return [];
+    return Array.isArray(analysis.support) ? analysis.support : [analysis.support].filter(v => typeof v === 'number');
+  }, [analysis]);
+  const rLevels = useMemo(() => {
+    if (!analysis) return [];
+    return Array.isArray(analysis.resistance) ? analysis.resistance : [analysis.resistance].filter(v => typeof v === 'number');
+  }, [analysis]);
+
+  const minVal = Math.min(...prices, ...sLevels, ...rLevels) || 0;
+  const maxVal = Math.max(...prices, ...sLevels, ...rLevels) || 100;
+  const range = maxVal - minVal || 1;
+  const W = 1000, H = 350;
+
+  const getY = useCallback((p) => H - ((p - minVal) / range) * (H - 80) - 40, [minVal, range, H]);
+  const getX = useCallback((i) => (i / Math.max(1, prices.length - 1)) * W, [prices.length, W]);
+
+  const pts = useMemo(() => prices.map((p, i) => ({ x: getX(i), y: getY(p) })), [prices, getX, getY]);
+
+  const mainPath = useMemo(() => {
+    if (pts.length < 2) return "";
+    let path = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i === 0 ? i : i - 1], p1 = pts[i], p2 = pts[i+1], p3 = pts[i+2 === pts.length ? i+1 : i+2];
+      const cp1x = p1.x + (p2.x - p0.x) / 6, cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6, cp2y = p2.y - (p3.y - p1.y) / 6;
+      path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+    return path;
+  }, [pts]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!svgRef.current || slicedHistory.length < 1) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * W;
+    const idx = Math.round((x / W) * (prices.length - 1));
+    if (idx >= 0 && idx < slicedHistory.length) {
+      const item = slicedHistory[idx];
+      setHoverData({ ...item, x: getX(idx), y: getY(item.price) });
+    }
+  }, [slicedHistory, prices.length, W, getX, getY]);
+
+  if (!analysis || !history || history.length < 2) {
+    return (
+      <div className="glass" style={{ height: 480, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+        <Loader2 className="animate-spin" size={32} color="#f59e0b" />
+        <div style={{ color: '#94a3b8', fontSize: 13, fontWeight: 700, letterSpacing: '0.05em' }}>VERİ AKIŞI BAŞLATILIYOR...</div>
+        <div style={{ color: '#64748b', fontSize: 11 }}>{history?.length || 0} / 5 veri toplandı</div>
+      </div>
+    );
   }
-  const prices = history.map(h => h.price)
-  const min = Math.min(...prices), max = Math.max(...prices), range = max - min || 1
-  const W = 600, H = 120
-  const pts = prices.map((p, i) => `${(i / (prices.length - 1)) * W},${H - ((p - min) / range) * (H - 10) - 5}`).join(' ')
-  const isUp = prices[prices.length - 1] >= prices[0]
-  const color = isUp ? '#22c55e' : '#ef4444'
-  const fillId = isUp ? 'greenFill' : 'redFill'
+
+  const areaPath = `${mainPath} L ${W} ${H} L 0 ${H} Z`;
+  const isUp = analysis.change >= 0;
+  const chartColor = isUp ? '#22c55e' : '#ef4444';
+  const lastPoint = pts[pts.length - 1];
+
+  // Signal Mapping
+  const getSignalLabel = (s, c) => {
+    if (s === 'BUY') return c > 75 ? '🟢 GÜÇLÜ AL' : '🟢 AL';
+    if (s === 'SELL') return c > 75 ? '🔴 GÜÇLÜ SAT' : '🔴 SAT';
+    return '🟡 BEKLE';
+  }
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 120 }} preserveAspectRatio="none">
-      <defs>
-        <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.18" />
-          <stop offset="100%" stopColor={color} stopOpacity="0.01" />
-        </linearGradient>
-      </defs>
-      <polygon points={`0,${H} ${pts} ${W},${H}`} fill={`url(#${fillId})`} />
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  )
-}
+    <div className="glass premium-terminal" style={{ padding: 0, overflow: 'hidden', border: `1px solid ${chartColor}22` }}>
+      {/* ── Terminal Header ── */}
+      <div style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: 'rgba(255,255,255,0.01)' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 8 }}>
+            <div className={`price-display trading-vibe-text ${flashClass}`} style={{ fontSize: 36, fontWeight: 900 }}>
+              ${analysis.price?.toFixed(2)}
+            </div>
+            <div style={{ padding: '4px 12px', borderRadius: 10, background: isUp ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', color: isUp ? '#4ade80' : '#f87171', fontSize: 16, fontWeight: 900, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {isUp ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
+              {Math.abs(analysis.change)?.toFixed(2)} (%{Math.abs(analysis.changePct)?.toFixed(2)})
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 800 }}>
+             <Activity size={12} color="#f59e0b" /> XAUUSD / USD • <span style={{ color: '#64748b' }}>REAL-TIME TERMINAL</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+             <button onClick={() => setShowIndicators(p => ({...p, ema: !p.ema}))} className={`tf-btn ${showIndicators.ema ? 'active' : ''}`} style={{fontSize: 10}}>EMA</button>
+             <button onClick={() => setShowIndicators(p => ({...p, sr: !p.sr}))} className={`tf-btn ${showIndicators.sr ? 'active' : ''}`} style={{fontSize: 10}}>S/R</button>
+             <div className="chart-timeframes" style={{ marginLeft: 8 }}>
+              {['1H', '1D', '3D', '1W', '1M'].map(tf => (
+                <button key={tf} onClick={() => setTimeframe(tf)} className={`tf-btn ${timeframe === tf ? 'active' : ''}`}>{tf}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'inline-flex', padding: '8px 20px', borderRadius: 12, background: sig.bg, border: `1px solid ${sig.border}`, color: sig.color, fontWeight: 900, fontSize: 15, boxShadow: `0 8px 25px ${sig.bg}` }}>
+            {getSignalLabel(analysis.signal, analysis.confidence)}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Chart Area ── */}
+      <div style={{ position: 'relative', height: 320, cursor: 'crosshair' }} onMouseMove={handleMouseMove} onMouseLeave={() => setHoverData(null)}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '100%', overflow: 'visible' }} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="terminalGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={chartColor} stopOpacity="0.25" />
+              <stop offset="100%" stopColor={chartColor} stopOpacity="0" />
+            </linearGradient>
+            <filter id="terminalGlow"><feGaussianBlur stdDeviation="5" result="blur"/><feComposite in="SourceGraphic" in2="blur" operator="over"/></filter>
+          </defs>
+          
+          {/* Grid */}
+          {[0, 1, 2, 3].map(i => <line key={i} x1="0" y1={(H/4)*i} x2={W} y2={(H/4)*i} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />)}
+          
+          {/* Support / Resistance */}
+          {showIndicators.sr && (
+            <>
+              {rLevels.map((lvl, i) => (
+                <g key={`res-${i}`}>
+                  <line x1="0" y1={getY(lvl)} x2={W} y2={getY(lvl)} stroke="#ef4444" strokeWidth="1" strokeDasharray="5,5" opacity={0.4 - i*0.1} />
+                  <text x="10" y={getY(lvl) - 5} fill="#ef4444" fontSize="10" fontWeight="800" opacity="0.6">RES ${lvl}</text>
+                </g>
+              ))}
+              {sLevels.map((lvl, i) => (
+                <g key={`sup-${i}`}>
+                  <line x1="0" y1={getY(lvl)} x2={W} y2={getY(lvl)} stroke="#22c55e" strokeWidth="1" strokeDasharray="5,5" opacity={0.4 - i*0.1} />
+                  <text x="10" y={getY(lvl) + 15} fill="#22c55e" fontSize="10" fontWeight="800" opacity="0.6">SUP ${lvl}</text>
+                </g>
+              ))}
+            </>
+          )}
+
+          {/* Entry Line */}
+          {stats?.currentPosition && (
+            <>
+              <line x1="0" y1={getY(stats.currentPosition.entryPrice)} x2={W} y2={getY(stats.currentPosition.entryPrice)} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="8,4" />
+              <text x={W-100} y={getY(stats.currentPosition.entryPrice) - 8} fill="#f59e0b" fontSize="11" fontWeight="900">ENTRY ${stats.currentPosition.entryPrice?.toFixed(2)}</text>
+            </>
+          )}
+
+          <path d={areaPath} fill="url(#terminalGradient)" />
+          <path d={mainPath} fill="none" stroke={chartColor} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" filter="url(#terminalGlow)" />
+          
+          {/* Hover Crosshair */}
+          {hoverData && (
+            <>
+              <line x1={hoverData.x} y1="0" x2={hoverData.x} y2={H} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4,2" />
+              <line x1="0" y1={hoverData.y} x2={W} y2={hoverData.y} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4,2" />
+              <circle cx={hoverData.x} cy={hoverData.y} r="5" fill="#fff" filter="url(#terminalGlow)" />
+            </>
+          )}
+
+          <circle cx={lastPoint.x} cy={lastPoint.y} r="6" fill={chartColor} filter="url(#terminalGlow)" />
+          <circle cx={lastPoint.x} cy={lastPoint.y} r="16" fill={chartColor} opacity="0.2" className="ping-animation" />
+        </svg>
+
+        {/* Hover Tooltip */}
+        {hoverData && (
+          <div style={{ position: 'absolute', top: hoverData.y - 45, left: hoverData.x > W-100 ? hoverData.x - 110 : hoverData.x + 15, background: 'rgba(15,23,42,0.95)', border: '1px solid rgba(255,255,255,0.1)', padding: '6px 12px', borderRadius: 8, pointerEvents: 'none', zIndex: 100 }}>
+            <div style={{ fontSize: 13, fontWeight: 900, color: '#fff' }}>${hoverData.price?.toFixed(2)}</div>
+            <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>{formatRelativeTime(hoverData.timestamp)}</div>
+          </div>
+        )}
+
+        <div style={{ position: 'absolute', bottom: 20, left: 24, right: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <ConfidenceBar value={analysis.confidence} text="ANALİZ GÜVENİ" />
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 10, color: '#64748b', fontWeight: 800 }}>DURUM:</span>
+            <div style={{ fontSize: 13, color: chartColor, fontWeight: 900 }}>{analysis.trend === 'UP' ? 'YÜKSELİŞ TRENDİ' : analysis.trend === 'DOWN' ? 'DÜŞÜŞ TRENDİ' : 'YATAY SEYİR'}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Terminal Footer ── */}
+      {analysis.insights && (
+        <div style={{ padding: '18px 24px', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(245,158,11,0.1)', color: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Zap size={18} /></div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 900, color: '#f1f5f9' }}>{analysis.insights.main}</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>{analysis.insights.detail}</div>
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+             <div style={{ fontSize: 10, color: '#64748b', fontWeight: 800 }}>RSI INDIKATÖRÜ</div>
+             <div style={{ fontSize: 14, fontWeight: 900, color: rsiColor(analysis.rsi) }}>{analysis.rsi} ( {analysis.rsi > 70 ? 'AŞIRI ALIM' : analysis.rsi < 30 ? 'AŞIRI SATIM' : 'NORMAL'} )</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
 
 function RSIGauge({ rsi }) {
   const color = rsiColor(rsi)
@@ -127,22 +344,12 @@ function LevelRow({ price, level, type }) {
   )
 }
 
-function TradingPanel({ token, analysis }) {
-  const [stats, setStats] = useState(null)
+function TradingPanel({ token, stats, fetchStats }) {
   const [loading, setLoading] = useState(false)
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const res = await axios.get(API('/api/xauusd/trade-stats'), { headers: { Authorization: `Bearer ${token}` } })
-      setStats(res.data)
-    } catch (_) {}
-  }, [token])
-
   useEffect(() => {
-    fetchStats()
-    const timer = setInterval(fetchStats, 10000)
-    return () => clearInterval(timer)
-  }, [fetchStats])
+    if (!stats) fetchStats()
+  }, [stats, fetchStats])
 
   const resetDemo = async () => {
     setLoading(true)
@@ -161,10 +368,13 @@ function TradingPanel({ token, analysis }) {
     setLoading(true)
     try {
       const res = await axios.post(API('/api/xauusd/manual-trade'), { type }, { headers: { Authorization: `Bearer ${token}` } })
-      if (res.data) await fetchStats()
+      if (res.data) {
+        await fetchStats()
+        alert('✅ ' + (res.data.message || 'İşlem başarıyla açıldı!'))
+      }
     } catch (err) {
       console.error('Manual trade error:', err)
-      alert(err.response?.data?.message || 'İşlem sırasında bir hata oluştu. Lütfen tekrar deneyin.')
+      alert('❌ ' + (err.response?.data?.message || 'İşlem sırasında bir hata oluştu.'))
     } finally { 
       setTimeout(() => setLoading(false), 500)
     }
@@ -174,10 +384,11 @@ function TradingPanel({ token, analysis }) {
     if (loading || !stats.currentPosition) return;
     setLoading(true)
     try {
-      await axios.post(API('/api/xauusd/close-position'), {}, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await axios.post(API('/api/xauusd/close-position'), {}, { headers: { Authorization: `Bearer ${token}` } })
       await fetchStats()
+      alert('✅ ' + (res.data.message || 'İşlem başarıyla kapatıldı!'))
     } catch (err) {
-      alert(err.response?.data?.message || 'İşlem kapatılamadı.')
+      alert('❌ ' + (err.response?.data?.message || 'İşlem kapatılamadı.'))
     } finally {
       setTimeout(() => setLoading(false), 500)
     }
@@ -186,22 +397,22 @@ function TradingPanel({ token, analysis }) {
   if (!stats) return null
 
   return (
-    <div className="glass" style={{ margin: '0 32px 24px', padding: '24px', border: '1px solid rgba(34,197,94,0.2)', background: 'rgba(34,197,94,0.02)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+    <div className="glass xau-trading-panel">
+      <div className="xau-panel-header" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 18, fontWeight: 900, color: '#22c55e' }}>
           <ProfitIcon size={22} /> Canlı Al-Sat Simülatörü
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div className="trading-actions">
           {stats.currentPosition ? (
             <button onClick={handleClosePosition} disabled={loading} style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', color: '#fff', padding: '10px 24px', borderRadius: 10, fontSize: 13, fontWeight: 900, cursor: 'pointer', transition: 'all 0.2s', boxShadow: '0 4px 12px rgba(239,68,68,0.2)' }}>
               {loading ? 'KAPATILIYOR...' : 'İŞLEMİ KAPAT (SAT)'}
             </button>
           ) : (
-            <button onClick={() => handleManualTrade('BUY')} disabled={loading} style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)', border: 'none', color: '#fff', padding: '10px 24px', borderRadius: 10, fontSize: 13, fontWeight: 900, cursor: 'pointer', opacity: loading ? 0.5 : 1, transition: 'all 0.2s', boxShadow: '0 4px 12px rgba(34,197,94,0.2)' }}>
+            <button onClick={() => handleManualTrade('BUY')} disabled={loading} style={{ flex: 1, background: 'linear-gradient(135deg, #22c55e, #16a34a)', border: 'none', color: '#fff', padding: '10px 16px', borderRadius: 10, fontSize: 13, fontWeight: 900, cursor: 'pointer', opacity: loading ? 0.5 : 1, transition: 'all 0.2s', boxShadow: '0 4px 12px rgba(34,197,94,0.2)' }}>
               {loading ? 'İŞLEM YAPILIYOR...' : 'MANUEL SATIN AL'}
             </button>
           )}
-          <button onClick={resetDemo} disabled={loading} style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', padding: '10px 20px', borderRadius: 10, fontSize: 12, fontWeight: 800, cursor: 'pointer', transition: 'all 0.2s' }}>
+          <button onClick={resetDemo} disabled={loading} style={{ flex: 1, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', padding: '10px 14px', borderRadius: 10, fontSize: 12, fontWeight: 800, cursor: 'pointer', transition: 'all 0.2s' }}>
             {loading ? 'YÜKLENİYOR...' : 'SANAL BAKİYE YÜKLE'}
           </button>
         </div>
@@ -213,11 +424,11 @@ function TradingPanel({ token, analysis }) {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
-        <StatCard label={stats.virtualBalance > 0 ? "SANAL BAKİYE" : "BAKİYE"} value={stats.virtualBalance ? `$${stats.virtualBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '0.00'} accent="#22c55e" icon={<DollarSign size={40} />} className="balance-glow" />
-        <StatCard label="Bugünkü Kâr (TL)" value={`${(stats.dailyProfitTl || 0).toLocaleString('tr-TR')} TL`} sub={`$${(stats.dailyProfit || 0).toFixed(2)} USD`} accent={(stats.dailyProfit || 0) >= 0 ? '#22c55e' : '#ef4444'} icon={<ProfitIcon size={40} />} />
-        <StatCard label="Toplam Kâr" value={`${(stats.totalProfitTl || 0).toLocaleString('tr-TR')} TL`} sub={`$${(stats.totalProfit || 0).toFixed(2)} USD`} accent={(stats.totalProfit || 0) >= 0 ? '#22c55e' : '#ef4444'} icon={<Activity size={40} />} />
-        <StatCard label="Durum" value={stats.currentPosition ? 'İŞLEMDE' : 'FIRSAT KOLLUYOR'} accent={stats.currentPosition ? '#f59e0b' : '#64748b'} icon={<Zap size={40} />} />
+      <div className="trading-stats-grid">
+        <StatCard label="SANAL BAKİYE" value={`${(stats.virtualBalance || 0).toLocaleString('tr-TR')} TL`} accent="#22c55e" icon={<DollarSign size={20} />} className="balance-glow" />
+        <StatCard label="BUGÜNKÜ KÂR" value={`${(stats.dailyProfitTl || 0).toLocaleString('tr-TR')} TL`} accent={(stats.dailyProfitTl || 0) >= 0 ? '#22c55e' : '#ef4444'} icon={<ProfitIcon size={20} />} historyData={stats.tradeHistory?.map(t => t.pnlTl).slice(-10)} />
+        <StatCard label="TOPLAM KÂR" value={`${(stats.totalProfitTl || 0).toLocaleString('tr-TR')} TL`} accent={(stats.totalProfitTl || 0) >= 0 ? '#22c55e' : '#ef4444'} icon={<Activity size={20} />} historyData={stats.tradeHistory?.map(t => t.pnlTl)} />
+        <StatCard label="DURUM" value={stats.currentPosition ? 'İŞLEMDE' : 'FIRSAT KOLLUYOR'} accent={stats.currentPosition ? '#f59e0b' : '#64748b'} icon={<Zap size={20} />} />
       </div>
 
       {stats.currentPosition && (
@@ -227,23 +438,17 @@ function TradingPanel({ token, analysis }) {
             <div>
               <span style={{ fontSize: 20, fontWeight: 900, color: '#f1f5f9' }}>BUY XAUUSD</span>
               <span style={{ marginLeft: 12, fontSize: 14, color: '#94a3b8' }}>Giriş: ${stats.currentPosition.entryPrice?.toFixed(2)}</span>
-              <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Lot: {stats.currentPosition.lotSize || 0.1} | Maliyet: ${(stats.currentPosition.cost || 0).toFixed(2)}</div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                Miktar: {stats.currentPosition.amount} oz | Kur: {stats.tlRate?.toFixed(2) || '45.00'} ₺ | Maliyet: {Math.round(stats.currentPosition.cost || 0).toLocaleString('tr-TR')} TL
+              </div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              {/* Gerçek zamanlı PNL: sunucudan gelen unrealizedPnlTl değerini kullan */}
-              {stats.unrealizedPnlTl !== undefined ? (
-                <div style={{ fontSize: 18, fontWeight: 900, color: stats.unrealizedPnlTl >= 0 ? '#22c55e' : '#ef4444' }}>
-                  {stats.unrealizedPnlTl >= 0 ? '+' : ''}{stats.unrealizedPnlTl} TL
-                  <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.8 }}>
-                    ({stats.unrealizedPnl >= 0 ? '+' : ''}{stats.unrealizedPnl?.toFixed(2)}$)
-                  </span>
-                </div>
-              ) : (
-                <div style={{ fontSize: 18, fontWeight: 900, color: '#94a3b8' }}>Hesaplanıyor...</div>
-              )}
+              <div style={{ fontSize: 18, fontWeight: 900, color: (stats.unrealizedPnlTl || 0) >= 0 ? '#22c55e' : '#ef4444' }}>
+                {(stats.unrealizedPnlTl || 0) >= 0 ? '+' : ''}{stats.unrealizedPnlTl || 0} TL
+              </div>
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>Anlık Kâr/Zarar</div>
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                Min. satış eşiği: {stats.minProfitTl || 300} TL
+                Satış Hedefi: +{stats.minProfitTl || 150} TL
               </div>
             </div>
           </div>
@@ -310,7 +515,7 @@ function BacktestPanel({ token }) {
   }
 
   return (
-    <div style={{ margin: '0 32px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 16, padding: '24px 28px' }}>
+    <div className="glass xau-backtest-panel" style={{ background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', padding: '20px 20px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 16, fontWeight: 800 }}>
           <PlayCircle size={20} color="#6366f1" /> Strateji Simülasyonu (Backtest)
@@ -395,7 +600,16 @@ export default function XauUsd() {
   const [alertSaved, setAlertSaved] = useState(false)
   const prevPrice = useRef(null)
   const [flash, setFlash] = useState(null)
+  const [stats, setStats] = useState(null)
   const token = localStorage.getItem('token')
+
+  const fetchStats = useCallback(async () => {
+    if (!token) return
+    try {
+      const res = await axios.get(API('/api/xauusd/trade-stats'), { headers: { Authorization: `Bearer ${token}` } })
+      setStats(res.data)
+    } catch (_) {}
+  }, [token])
 
   const fetchActiveAlerts = useCallback(async () => {
     try {
@@ -439,9 +653,13 @@ export default function XauUsd() {
   useEffect(() => {
     fetchData(false).finally(() => setLoading(false))
     fetchActiveAlerts()
-    const timer = setInterval(() => fetchData(false), 60_000)
+    fetchStats()
+    const timer = setInterval(() => {
+      fetchData(false)
+      fetchStats()
+    }, 5_000)
     return () => clearInterval(timer)
-  }, [fetchData, fetchActiveAlerts])
+  }, [fetchData, fetchActiveAlerts, fetchStats])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -474,77 +692,67 @@ export default function XauUsd() {
     )
   }
 
+  if (!analysis && !error) {
+    return (
+      <div style={{ ...styles.page, height: '80vh', justifyContent: 'center', alignItems: 'center' }}>
+        <div className="glass" style={{ padding: '48px', textAlign: 'center', maxWidth: '400px', border: '1px solid var(--primary)' }}>
+          <div style={{ position: 'relative', width: '80px', height: '80px', margin: '0 auto 24px' }}>
+            <div className="status-dot" style={{ width: '80px', height: '80px', opacity: 0.2 }}></div>
+            <Activity size={40} color="var(--primary)" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }} className="animate-pulse" />
+          </div>
+          <h2 style={{ fontSize: '20px', fontWeight: '900', marginBottom: '8px', background: 'linear-gradient(135deg, #fff, var(--primary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>ANALİZ MOTORU BAŞLATILIYOR</h2>
+          <p style={{ color: '#94a3b8', fontSize: '13px', fontWeight: '500', lineHeight: '1.6' }}>Sistem ilk verileri topluyor. Analizlerin hazırlanması için yaklaşık 60 saniye gereklidir.</p>
+          <div style={{ marginTop: '24px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', overflow: 'hidden' }}>
+            <div className="animate-loading-bar" style={{ height: '100%', background: 'var(--primary)', width: '30%', borderRadius: '10px' }}></div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const sig = analysis ? signalStyle(analysis.signal) : signalStyle('NEUTRAL')
   const flashClass = flash === 'up' ? 'price-flash-up' : flash === 'down' ? 'price-flash-down' : ''
 
   return (
-    <div style={styles.page} className="animate-entrance">
-      <div style={styles.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={styles.goldIcon}><TrendingUp size={24} color="#1c1917" /></div>
+    <div className="xau-page animate-entrance" style={{ position: 'relative', zIndex: 20 }}>
+      <div className="xau-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 42, height: 42, flexShrink: 0, background: 'linear-gradient(135deg, #f59e0b, #d97706)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 6px 20px rgba(245,158,11,0.35)' }}>
+            <TrendingUp size={20} color="#1c1917" />
+          </div>
           <div>
-            <h2 style={{ fontSize: 22, fontWeight: 900, margin: 0, color: '#f8fafc' }}>XAUUSD CANLI ANALİZ TERMİNALİ</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 10px #22c55e' }} />
-              <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>Canlı Analiz Akışı</p>
+            <h2 style={{ fontSize: 17, fontWeight: 900, margin: 0, color: '#f8fafc', lineHeight: 1.2 }}>XAUUSD TERMİNAL</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px #22c55e', flexShrink: 0 }} />
+              <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>Canlı Analiz Akışı</p>
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 800 }}>SON GÜNCELLEME</div>
-            <div style={{ fontSize: 13, color: '#94a3b8', fontWeight: 600 }}>{formatRelativeTime(analysis?.timestamp)}</div>
+            <div style={{ fontSize: 9, color: '#94a3b8', fontWeight: 800 }}>SON GÜNCELLEME</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>{formatRelativeTime(analysis?.timestamp)}</div>
           </div>
-          <button onClick={handleRefresh} disabled={refreshing} style={styles.refreshBtn}>
-            <RefreshCw size={16} style={refreshing ? styles.spinning : {}} />
-            {refreshing ? 'Veri Çekiliyor...' : 'YENİLE'}
+          <button onClick={handleRefresh} disabled={refreshing} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#f8fafc', padding: '8px 14px', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: 12, transition: 'all 0.2s', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            <RefreshCw size={14} style={refreshing ? styles.spinning : {}} />
+            {refreshing ? '...' : 'YENİLE'}
           </button>
         </div>
       </div>
 
-      {error && <div style={styles.errorBanner}><AlertTriangle size={16} /> {error}</div>}
+      {error && <div style={{ margin: '0 16px', padding: '12px 16px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12, color: '#f87171', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}><AlertTriangle size={16} /> {error}</div>}
 
-      <div style={styles.mainGrid}>
-        <div style={{ flex: 1.5, display: 'flex', flexDirection: 'column', gap: 24 }}>
-          {analysis && (
-            <div className={`glass ${flashClass}`} style={styles.priceCard}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 800, letterSpacing: '0.1em', marginBottom: 4 }}>SPOT MARKET PRICE</div>
-                  <div style={{ fontSize: 56, fontWeight: 900, letterSpacing: '-0.02em', color: '#f8fafc' }} className="trading-vibe-text">
-                    ${analysis.price?.toFixed(2) ?? '---'}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                    <span style={{ fontSize: 18, fontWeight: 900, color: analysis.change >= 0 ? '#22c55e' : '#ef4444' }}>
-                      {analysis.change >= 0 ? '▲' : '▼'} {Math.abs(analysis.change)?.toFixed(2)}
-                    </span>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', background: 'rgba(255,255,255,0.03)', padding: '2px 8px', borderRadius: 6 }}>
-                      %{analysis.changePct >= 0 ? '+' : ''}{analysis.changePct?.toFixed(3)}
-                    </span>
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right', minWidth: 160 }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: sig.bg, border: `1px solid ${sig.border}`, borderRadius: 12, padding: '12px 24px', marginBottom: 16 }}>
-                    <span style={{ fontSize: 20, fontWeight: 900, color: sig.color }}>{sig.label}</span>
-                  </div>
-                  <ConfidenceBar value={analysis.confidence ?? 0} text={analysis.confidenceText} />
-                </div>
-              </div>
+      <div className="xau-main-grid">
+        <div className="xau-left">
+          <PremiumTerminal 
+            history={history} 
+            analysis={analysis} 
+            sig={sig} 
+            flashClass={flashClass}
+            stats={stats}
+          />
 
-              {analysis.insights && (
-                <div className="insight-card">
-                  <div style={{ fontSize: 14, fontWeight: 800, color: '#f8fafc', marginBottom: 4 }}>💡 {analysis.insights.main}</div>
-                  <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>{analysis.insights.detail}</div>
-                </div>
-              )}
-
-              <div style={{ marginTop: 24 }}>
-                <MiniChart history={history} />
-              </div>
-            </div>
-          )}
-
-          <div style={styles.statsGrid}>
+          <div className="xau-stats-grid">
             <StatCard label="Trend" value={analysis?.trend === 'UP' ? 'YUKARI' : analysis?.trend === 'DOWN' ? 'AŞAĞI' : 'YATAY'}
               sub={analysis?.trend === 'UP' ? 'Alıcılar güçlü' : analysis?.trend === 'DOWN' ? 'Satıcılar güçlü' : 'Piyasa kararsız'}
               accent={analysis?.trend === 'UP' ? '#22c55e' : analysis?.trend === 'DOWN' ? '#ef4444' : '#f59e0b'}
@@ -552,34 +760,34 @@ export default function XauUsd() {
             
             <StatCard label="RSI Durumu" 
               value={analysis?.rsiSignal === 'OVERSOLD' ? 'AŞIRI SATIM' : analysis?.rsiSignal === 'OVERBOUGHT' ? 'AŞIRI ALIM' : 'NÖTR'}
-              sub={analysis?.rsi !== null ? `RSI: ${analysis.rsi}` : 'Hesaplanıyor...'}
+              sub={analysis?.rsi !== undefined && analysis?.rsi !== null ? `RSI: ${analysis.rsi}` : 'Hesaplanıyor...'}
               accent={rsiColor(analysis?.rsi)} icon={<Activity size={40} />} />
 
             <StatCard label="Veri Durumu" value={`%${analysis?.historyPercent || 0}`}
               sub={`${analysis?.historyCount || 0} bar analiz edildi`}
-              progress={analysis?.historyPercent} accent="#8b5cf6" icon={<Shield size={40} />} />
+              progress={analysis?.historyPercent || 0} accent="#8b5cf6" icon={<Shield size={40} />} />
           </div>
 
-          <div style={styles.srGrid}>
+          <div className="xau-sr-grid">
             <div className="glass" style={{ padding: 24 }}>
               <div style={styles.srTitle}><Shield size={16} color="#ef4444" /><span>DİRENÇ BÖLGELERİ</span></div>
-              {analysis?.resistance?.length > 0 ? analysis.resistance.slice().reverse().map((lvl, i) => <LevelRow key={i} price={analysis.price} level={lvl} type="resistance" />) : <p style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500, padding: '10px 0' }}>Sistem direnç seviyelerini hesaplıyor...</p>}
+              {Array.isArray(analysis?.resistance) ? analysis.resistance.slice().reverse().map((lvl, i) => <LevelRow key={i} price={analysis.price} level={lvl} type="resistance" />) : <p style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500, padding: '10px 0' }}>Sistem direnç seviyelerini hesaplıyor...</p>}
             </div>
             <div className="glass" style={{ padding: 24 }}>
               <div style={styles.srTitle}><Target size={16} color="#22c55e" /><span>DESTEK BÖLGELERİ</span></div>
-              {analysis?.support?.length > 0 ? [...analysis.support].reverse().map((lvl, i) => <LevelRow key={i} price={analysis.price} level={lvl} type="support" />) : <p style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500, padding: '10px 0' }}>Sistem destek seviyelerini hesaplıyor...</p>}
+              {Array.isArray(analysis?.support) ? analysis.support.slice().reverse().map((lvl, i) => <LevelRow key={i} price={analysis.price} level={lvl} type="support" />) : <p style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500, padding: '10px 0' }}>Sistem destek seviyelerini hesaplıyor...</p>}
             </div>
           </div>
         </div>
 
-        <div style={{ flex: 0.8, display: 'flex', flexDirection: 'column', gap: 24 }}>
+        <div className="xau-right">
           <div className="glass" style={{ padding: 24, background: 'rgba(245,158,11,0.03)', border: '1px solid rgba(245,158,11,0.1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 16, fontWeight: 900, marginBottom: 20 }}>
               <Bell size={20} color="#f59e0b" /> Alarm Merkezi
             </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div className="xau-sr-grid" style={{ marginBottom: 4 }}>
                 <div>
                   <label style={styles.alertLabel}>Düşüş Alarmı ($)</label>
                   <input type="number" placeholder="Örn: 50" value={alertInput.drop} onChange={e => setAlertInput(p => ({ ...p, drop: e.target.value }))} style={styles.alertInput} />
@@ -637,10 +845,10 @@ export default function XauUsd() {
         </div>
       </div>
 
-      <TradingPanel token={token} analysis={analysis} />
+      <TradingPanel token={token} stats={stats} fetchStats={fetchStats} />
       <BacktestPanel token={token} />
 
-      <div style={styles.disclaimer}>
+      <div style={{ margin: '0 16px', padding: '14px 18px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.1)', borderRadius: 12, fontSize: 12, color: '#64748b', display: 'flex', gap: 12, lineHeight: 1.6 }}>
         <Info size={14} style={{ flexShrink: 0, marginTop: 2 }} />
         <div>
           <b>Risk Protokolü:</b> Bu terminal yüksek volatilite içeren teknik analiz verileri sunar. Yatırım tavsiyesi değildir.

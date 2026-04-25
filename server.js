@@ -113,7 +113,7 @@ xauusd.setAlertCallback(async (type, data) => {
   }
 });
 
-xauusd.startPolling(30_000);
+xauusd.startPolling(5_000);
 
 app.use(cors());
 app.use(express.json());
@@ -347,13 +347,13 @@ app.get("/", (req, res) => {
   res.status(404).send("Not built");
 });
 
-app.get("*path", (req, res) => {
+app.use((req, res) => {
   if (req.url.startsWith("/api")) return res.status(404).json({ message: "Not found" });
   if (fs.existsSync(indexPath)) res.sendFile(indexPath); else res.status(404).send("Not found");
 });
 
 let scrapingProducts = new Set(); // Global lock yerine per-product takibi
-cron.schedule("*/5 * * * *", async () => {
+cron.schedule("*/1 * * * *", async () => {
   try {
     const products = await db.getAllActiveProducts();
     

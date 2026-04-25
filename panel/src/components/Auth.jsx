@@ -67,7 +67,7 @@ const Auth = ({ onLogin }) => {
 
   return (
     <div className="flex-center">
-      <div className="glass animate-entrance" style={{ padding: '48px' }}>
+      <div className="glass auth-glass animate-entrance" style={{ padding: '32px 28px' }}>
         {/* Subtle Decorative Glow */}
         <div style={{ 
           position: 'absolute', 
@@ -87,7 +87,7 @@ const Auth = ({ onLogin }) => {
           transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
           textAlign: 'center'
         }}>
-          <div className="flex-center" style={{ 
+          <div className="center-all" style={{ 
             width: '72px', 
             height: '72px', 
             background: 'rgba(255,255,255,0.03)', 

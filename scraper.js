@@ -1,6 +1,7 @@
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const axios = require("axios");
+const fs = require("fs");
 const ai = require("./ai");
 puppeteer.use(StealthPlugin());
 
@@ -26,6 +27,9 @@ const SLOT_WAIT_TIMEOUT_MS = 30000; // Slot bekleme zaman aşımı
 const BROWSER_IDLE_RESTART_MS = 10 * 60 * 1000;
 
 const launchOptions = {
+  executablePath: process.platform === "linux" 
+    ? "/home/serkan/.cache/puppeteer/chrome/linux-147.0.7727.57/chrome-linux64/chrome"
+    : undefined,
   headless: true,
   args: [
     "--no-sandbox",
@@ -34,35 +38,13 @@ const launchOptions = {
     "--disable-dev-shm-usage",
     "--disable-gpu",
     "--disable-infobars",
-    "--window-position=0,0",
-    "--ignore-certificate-errors",
-    "--ignore-certificate-errors-spki-list",
-    "--window-size=1920,1080",
-    "--disable-background-timer-throttling",
-    "--disable-renderer-backgrounding",
-    "--disable-backgrounding-occluded-windows",
+    "--no-zygote",
+    "--window-size=1280,720"
   ],
-  protocolTimeout: 60000,
+  protocolTimeout: 120000,
+  timeout: 60000
 };
 
-// Linux'ta ek flagler gerekli (snap Chromium / usr/bin uyumu için)
-if (process.platform === "linux") {
-  launchOptions.args.push("--no-zygote", "--single-process");
-  const fs = require("fs");
-  const chromiumPaths = [
-    "/usr/bin/chromium-browser",
-    "/snap/bin/chromium",
-    "/usr/bin/chromium",
-    "/usr/bin/google-chrome",
-  ];
-  for (const p of chromiumPaths) {
-    if (fs.existsSync(p)) {
-      launchOptions.executablePath = p;
-      console.log(`[SCRAPER] Chromium yolu: ${p}`);
-      break;
-    }
-  }
-}
 
 
 async function getBrowser() {
