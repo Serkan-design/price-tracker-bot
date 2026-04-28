@@ -20,7 +20,7 @@ function getRandomUA() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-const MAX_PAGES = 2; // Daha stabil çalışma için 3'ten 2'ye düşürüldü
+const MAX_PAGES = 1; // CPU kullanımını düşürmek için 1'e indirildi
 const PAGE_TIMEOUT_MS = 25000;
 const SLOT_WAIT_TIMEOUT_MS = 30000;
 const BROWSER_IDLE_RESTART_MS = 15 * 60 * 1000; // 30dk çok uzun, 15dk'ya çekildi
