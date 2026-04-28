@@ -357,16 +357,15 @@ cron.schedule("*/1 * * * *", async () => {
   try {
     const products = await db.getAllActiveProducts();
     
-    // En eski güncellenen ürünler önce (stale-first): hiç güncellenmemiş > en eski tarih
     products.sort((a, b) => {
       const ta = a.lastCheck ? new Date(a.lastCheck).getTime() : 0;
       const tb = b.lastCheck ? new Date(b.lastCheck).getTime() : 0;
       return ta - tb;
     });
 
-    // 3'er 3'er paralel işle (scraper MAX_PAGES = 5 ile uyumlu)
-    for (let i = 0; i < products.length; i += 3) {
-      const batch = products.slice(i, i + 3).filter(p => !scrapingProducts.has(p.id));
+    // 2'şerli gruplar halinde işle (MAX_PAGES = 2 ile uyumlu)
+    for (let i = 0; i < products.length; i += 2) {
+      const batch = products.slice(i, i + 2).filter(p => !scrapingProducts.has(p.id));
       if (batch.length === 0) continue;
 
       await Promise.all(batch.map(async (product) => {
@@ -374,55 +373,65 @@ cron.schedule("*/1 * * * *", async () => {
         try {
           const info = await scraper.getProductInfo(product.url);
           const currentPrice = info.price;
-          if (!currentPrice) {
-            console.warn(`[CRON] Fiyat alınamadı: ${product.name} (${product.url.substring(0, 60)}...)`);
-            return;
-          }
-
-          await db.addPriceHistory(product.id, currentPrice);
-
-          if (product.currentPrice && currentPrice < product.currentPrice) {
-            const dropPct = ((product.currentPrice - currentPrice) / product.currentPrice) * 100;
-            const htmlBody = mailer.buildProductAlertHtml({
-              name: product.name, url: product.url,
-              oldPrice: product.currentPrice, newPrice: currentPrice, dropPct,
-            });
-            const telegramMsg = `🎉 <b>Fiyat Düştü!</b> (%${Math.round(dropPct)})\n\n📦 ${product.name}\n💰 Yeni: ${currentPrice} TL\n\n🔗 <a href="${product.url}">Ürüne Git</a>`;
-
-            let chatId = product.chatId;
-            let email = null;
-            if (product.userId && !product.userId.startsWith("tg_")) {
-              const userDoc = await db.db.collection("users").doc(product.userId).get();
-              if (userDoc.exists) {
-                const data = userDoc.data();
-                chatId = data.telegramChatId;
-                email = data.notificationEmail;
-                const notifType = data.notificationPref?.type || "telegram";
-                await notifyUser({
-                  email: notifType === "email" ? email : null,
-                  chatId: notifType === "telegram" ? chatId : null,
-                  subject: `Fiyat Düştü: ${product.name}`,
-                  htmlBody, telegramMsg,
-                });
-              }
-            } else if (product.userId?.startsWith("tg_") && bot) {
-              chatId = product.userId.replace("tg_", "");
-              bot.sendMessage(chatId, telegramMsg, { parse_mode: "HTML" }).catch(() => {});
-            }
-          }
-
-          await db.updateProduct(product.id, {
-            currentPrice, lastCheck: new Date().toISOString(),
+          
+          const updates = {
+            lastCheck: new Date().toISOString(),
             checkCount: (product.checkCount || 0) + 1,
-          });
+            lastError: null
+          };
 
-          console.log(`[CRON] ✅ ${product.name?.substring(0, 30)} → ${currentPrice} TL`);
+          if (currentPrice) {
+            updates.currentPrice = currentPrice;
+            await db.addPriceHistory(product.id, currentPrice);
+
+            if (product.currentPrice && currentPrice < product.currentPrice) {
+              const dropPct = ((product.currentPrice - currentPrice) / product.currentPrice) * 100;
+              const htmlBody = mailer.buildProductAlertHtml({
+                name: product.name, url: product.url,
+                oldPrice: product.currentPrice, newPrice: currentPrice, dropPct,
+              });
+              const telegramMsg = `🎉 <b>Fiyat Düştü!</b> (%${Math.round(dropPct)})\n\n📦 ${product.name}\n💰 Yeni: ${currentPrice} TL\n\n🔗 <a href="${product.url}">Ürüne Git</a>`;
+
+              let chatId = product.chatId;
+              if (product.userId && !product.userId.startsWith("tg_")) {
+                const userDoc = await db.db.collection("users").doc(product.userId).get();
+                if (userDoc.exists) {
+                  const data = userDoc.data();
+                  chatId = data.telegramChatId;
+                  const email = data.notificationEmail;
+                  const notifType = data.notificationPref?.type || "telegram";
+                  await notifyUser({
+                    email: notifType === "email" ? email : null,
+                    chatId: notifType === "telegram" ? chatId : null,
+                    subject: `Fiyat Düştü: ${product.name}`,
+                    htmlBody, telegramMsg,
+                  });
+                }
+              } else if (product.userId?.startsWith("tg_") && bot) {
+                chatId = product.userId.replace("tg_", "");
+                bot.sendMessage(chatId, telegramMsg, { parse_mode: "HTML" }).catch(() => {});
+              }
+            }
+            console.log(`[CRON] ✅ ${product.name?.substring(0, 30)} → ${currentPrice} TL`);
+          } else {
+            updates.lastError = "Fiyat bulunamadı";
+            console.warn(`[CRON] ⚠️ Fiyat bulunamadı: ${product.name}`);
+          }
+
+          await db.updateProduct(product.id, updates);
         } catch (err) {
           console.error(`[CRON] ❌ Hata (${product.name?.substring(0, 30)}): ${err.message}`);
+          await db.updateProduct(product.id, { 
+            lastCheck: new Date().toISOString(),
+            lastError: err.message 
+          }).catch(() => {});
         } finally {
           scrapingProducts.delete(product.id);
         }
       }));
+
+      // Gruplar arası 2 saniye bekle (CPU spike önleme)
+      await new Promise(r => setTimeout(r, 2000));
     }
   } catch (err) {
     console.error("[CRON] Kritik hata:", err.message);

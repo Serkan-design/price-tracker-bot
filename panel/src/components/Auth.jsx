@@ -59,7 +59,11 @@ const Auth = ({ onLogin }) => {
         }, 200)
       }
     } catch (err) {
-      setError(humanizeError(err.response?.data?.message || 'Bir hata oluştu'))
+      if (!err.response) {
+        setError(humanizeError(null));
+      } else {
+        setError(humanizeError(err.response?.data?.message || 'Bir hata oluştu'));
+      }
     } finally {
       setLoading(false)
     }

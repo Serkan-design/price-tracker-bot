@@ -3,56 +3,71 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const axios = require("axios");
 const fs = require("fs");
 const ai = require("./ai");
+const cheerio = require("cheerio");
 puppeteer.use(StealthPlugin());
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Edge/122.0.0.0",
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Version/17.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
 ];
 
 function getRandomUA() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-let _browser = null;
-let _launching = false;
-let _activePages = 0;
-let _restartTimer = null;
-const MAX_PAGES = 5;              // Eş zamanlı maksimum sekme
-const PAGE_TIMEOUT_MS = 45000;   // Toplam sayfa zaman aşımı
-const SLOT_WAIT_TIMEOUT_MS = 30000; // Slot bekleme zaman aşımı
-const BROWSER_IDLE_RESTART_MS = 10 * 60 * 1000;
+const MAX_PAGES = 2; // Daha stabil çalışma için 3'ten 2'ye düşürüldü
+const PAGE_TIMEOUT_MS = 25000;
+const SLOT_WAIT_TIMEOUT_MS = 30000;
+const BROWSER_IDLE_RESTART_MS = 15 * 60 * 1000; // 30dk çok uzun, 15dk'ya çekildi
+
+// PRO LEVEL: Cache & Tracking
+const scrapeCache = new Map();
+const activeUrls = new Set();
+const CACHE_TTL = 5 * 60 * 1000; 
+const stats = { success: 0, fail: 0, blocks: 0 };
+const platformFailCount = new Map();
+
+const isProd = process.env.NODE_ENV === "production";
+const headlessMode = process.env.HEADLESS !== "false";
 
 const launchOptions = {
   executablePath: process.platform === "linux" 
     ? "/home/serkan/.cache/puppeteer/chrome/linux-147.0.7727.57/chrome-linux64/chrome"
     : undefined,
-  headless: true,
+  headless: headlessMode,
   args: [
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--disable-dev-shm-usage",
+    "--disable-accelerated-2d-canvas",
     "--disable-gpu",
     "--disable-infobars",
+    "--disable-extensions",
+    "--disable-features=IsolateOrigins,site-per-process",
     "--no-zygote",
+    "--no-first-run",
     "--window-size=1280,720"
   ],
-  protocolTimeout: 120000,
-  timeout: 60000
+  protocolTimeout: 60000,
+  timeout: 45000
 };
 
-
+let _browser = null;
+let _launching = false;
+let _activePages = 0;
+let _restartTimer = null;
 
 async function getBrowser() {
   if (_launching) {
-    // Diğer launch işlemini bekle (max 15 saniye)
     const deadline = Date.now() + 15000;
     while (_launching && Date.now() < deadline) await new Promise(r => setTimeout(r, 100));
-    if (_launching) throw new Error("Browser launch timeout (deadlock)");
+    if (_launching) throw new Error("Browser launch timeout");
   }
 
   if (_browser) {
@@ -60,23 +75,21 @@ async function getBrowser() {
       await _browser.version();
       return _browser;
     } catch (e) { 
-      console.warn("[SCRAPER] Browser yanıt vermiyor, yeniden başlatılıyor...");
+      console.warn("[SCRAPER] Browser unresponsive, resetting...");
       try { await _browser.close(); } catch (_) {}
       _browser = null;
-      _activePages = 0; // Browser çöktüğünde sayacı sıfırla
+      _activePages = 0;
     }
   }
 
   _launching = true;
   try {
-    console.log("[SCRAPER] Browser başlatılıyor...");
+    if (!isProd) console.log("[SCRAPER] Browser başlatılıyor...");
     _browser = await puppeteer.launch(launchOptions);
     _browser.on("disconnected", () => { 
-      console.warn("[SCRAPER] Browser bağlantısı kesildi, sayaç sıfırlanıyor.");
       _browser = null;
-      _activePages = 0; // Kritik: çökmede sıkışmayı önle
+      _activePages = 0;
     });
-    console.log("[SCRAPER] Browser hazır.");
     return _browser;
   } finally {
     _launching = false;
@@ -89,11 +102,9 @@ function waitForSlot() {
     const check = () => {
       if (_activePages < MAX_PAGES) {
         _activePages++;
-        resolve();
+        resolve(true); // Slot alındı
       } else if (Date.now() - startTime > SLOT_WAIT_TIMEOUT_MS) {
-        // Zaman aşımı: sonsuz beklemeyi önle
-        console.warn(`[SCRAPER] Slot zaman aşımı! Aktif: ${_activePages}/${MAX_PAGES}`);
-        reject(new Error(`Puppeteer slot zaman aşımı (${MAX_PAGES} sekme dolu)`));
+        reject(new Error(`Slot timeout`));
       } else {
         setTimeout(check, 500);
       }
@@ -108,7 +119,6 @@ function releaseSlot() {
     clearTimeout(_restartTimer);
     _restartTimer = setTimeout(async () => {
       if (_activePages === 0 && _browser) {
-        console.log("[SCRAPER] Closing idle browser...");
         try { await _browser.close(); } catch (_) {}
         _browser = null;
       }
@@ -116,33 +126,30 @@ function releaseSlot() {
   }
 }
 
-// Güvenlik kontrolü: sıkışmış sayaçları temizle
+// CACHE CLEANUP
+setInterval(() => {
+  if (!isProd) console.log("[PRO] Flushing cache...");
+  scrapeCache.clear();
+}, 10 * 60 * 1000);
+
+// AUTO HEAL & HEALTH CHECK
 setInterval(async () => {
-  if (_activePages > 0 && !_browser) {
-    console.warn(`[SCRAPER] Browser yok ama ${_activePages} aktif slot var, sıfırlanıyor.`);
+  if (isProd) console.log(`[HEALTH] S:${stats.success} F:${stats.fail} B:${stats.blocks} | P:${_activePages} | C:${scrapeCache.size}`);
+  
+  if (stats.fail > 15 && _browser) { // 20'den 15'e çekildi
+    console.warn("[PRO] High failure rate detected, resetting browser...");
+    try { 
+      const b = _browser;
+      _browser = null;
+      await b.close().catch(() => {});
+    } catch (_) {}
+    stats.fail = 0;
     _activePages = 0;
   }
-  // Browser sayfalarını kontrol et
-  if (_browser) {
-    try {
-      const pages = await _browser.pages();
-      const actualOpen = pages.length - 1; // blank tab dahil
-      if (actualOpen < _activePages) {
-        console.warn(`[SCRAPER] Gerçek sayfa (${actualOpen}) < sayaç (${_activePages}), düzeltiliyor.`);
-        _activePages = Math.max(0, actualOpen);
-      }
-    } catch (_) {}
-  }
-}, 20000);
+}, 60000);
 
-// ─────────────────────────────────────────────────────────────
-// HEPSİBURADA API-FIRST SCRAPER
-// Bot tespitini atlatmak için önce JSON API'yi dene
-// ─────────────────────────────────────────────────────────────
 function extractHbProductId(url) {
-  // https://www.hepsiburada.com/urun-adi-pm-HB00000XXXXX
-  const match = url.match(/-(pm-[A-Z0-9]+)(?:[?#]|$)/i)
-             || url.match(/\/([A-Z0-9]{10,})(?:[?#]|$)/i);
+  const match = url.match(/-(pm-[A-Z0-9]+)(?:[?#]|$)/i) || url.match(/\/([A-Z0-9]{10,})(?:[?#]|$)/i);
   return match ? match[1].toUpperCase() : null;
 }
 
@@ -150,69 +157,18 @@ async function fetchHepsiburadaViaApi(url) {
   try {
     const productId = extractHbProductId(url);
     if (!productId) return null;
-
-    const apiUrl = `https://productdiscovery.hepsiburada.com/Search/GetProductInfo?ProductId=${productId}`;
-    const res = await axios.get(apiUrl, {
+    const res = await axios.get(`https://productdiscovery.hepsiburada.com/Search/GetProductInfo?ProductId=${productId}`, {
       timeout: 12000,
-      headers: {
-        "User-Agent": getRandomUA(),
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "tr-TR,tr;q=0.9",
-        "Referer": "https://www.hepsiburada.com/",
-        "X-Requested-With": "XMLHttpRequest",
-        "Origin": "https://www.hepsiburada.com",
-      },
+      headers: { "User-Agent": getRandomUA(), "Accept": "application/json", "Referer": "https://www.hepsiburada.com/" },
     });
-
-    const data = res.data;
-    // API dönen fiyat alanları
-    const price =
-      data?.price ||
-      data?.salePrice ||
-      data?.originalPrice ||
-      data?.result?.price ||
-      data?.result?.salePrice;
-
-    if (price && !isNaN(parseFloat(price))) {
-      console.log(`[HB-API] ✅ Fiyat API'den alındı: ${price}`);
-      return { price: parseFloat(price), name: data?.name || data?.result?.name || null };
-    }
-  } catch (err) {
-    console.warn(`[HB-API] API denemesi başarısız: ${err.message}`);
-  }
-
-  // İkinci deneme: Hepsiburada'nın listing/search API'si
-  try {
-    const productId = extractHbProductId(url);
-    if (!productId) return null;
-    const res2 = await axios.get(
-      `https://www.hepsiburada.com/api/product/detail/sku/${productId}`,
-      {
-        timeout: 12000,
-        headers: {
-          "User-Agent": getRandomUA(),
-          "Accept": "application/json",
-          "Referer": "https://www.hepsiburada.com/",
-          "Accept-Language": "tr-TR,tr;q=0.9",
-        },
-      }
-    );
-    const d = res2.data;
-    const price2 = d?.price || d?.salePrice || d?.data?.price;
-    if (price2 && !isNaN(parseFloat(price2))) {
-      console.log(`[HB-API2] ✅ Fiyat 2. API'den alındı: ${price2}`);
-      return { price: parseFloat(price2), name: d?.name || null };
-    }
-  } catch (_) {}
-
+    const d = res.data;
+    const p = d?.price || d?.result?.price || d?.salePrice;
+    if (p && !isNaN(parseFloat(p))) return { price: parseFloat(p), name: d?.name || d?.result?.name || null };
+  } catch (err) {}
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────
-// TRENDYOL API-FIRST SCRAPER
-// ─────────────────────────────────────────────────────────────
 function extractTrendyolProductId(url) {
-  // https://www.trendyol.com/urun-adi-p-123456789
   const match = url.match(/[?&-]p-(\d+)/i) || url.match(/\/p-(\d+)/i);
   return match ? match[1] : null;
 }
@@ -221,529 +177,320 @@ async function fetchTrendyolViaApi(url) {
   try {
     const productId = extractTrendyolProductId(url);
     if (!productId) return null;
-
-    // Trendyol ürün detay API'si
-    const apiUrl = `https://public.trendyol.com/discovery-web-productgw-service/api/productGroupWithAttributes/${productId}?storefrontId=1&culture=tr-TR&currencyId=1&channelId=1`;
-    const res = await axios.get(apiUrl, {
+    const res = await axios.get(`https://public.trendyol.com/discovery-web-productgw-service/api/productGroupWithAttributes/${productId}?storefrontId=1&culture=tr-TR&currencyId=1&channelId=1`, {
       timeout: 12000,
-      headers: {
-        "User-Agent": getRandomUA(),
-        "Accept": "application/json",
-        "Accept-Language": "tr-TR,tr;q=0.9",
-        "Referer": "https://www.trendyol.com/",
-        "Origin": "https://www.trendyol.com",
-      },
+      headers: { "User-Agent": getRandomUA(), "Accept": "application/json", "Referer": "https://www.trendyol.com/" },
     });
-
-    const data = res.data?.result;
-    if (!data) return null;
-
-    // Fiyat alanları
-    const price =
-      data?.price?.discountedPrice?.value ||
-      data?.price?.originalPrice?.value ||
-      data?.priceInfo?.discountedPrice ||
-      data?.priceInfo?.price;
-
-    const name = data?.name || data?.productName;
-
-    if (price && !isNaN(parseFloat(price))) {
-      console.log(`[TY-API] ✅ Fiyat API'den alındı: ${price} TL`);
-      return { price: parseFloat(price), name: name || null };
-    }
-  } catch (err) {
-    console.warn(`[TY-API] API denemesi başarısız: ${err.message}`);
-  }
+    const d = res.data?.result;
+    const p = d?.price?.discountedPrice?.value || d?.price?.originalPrice?.value;
+    if (p && !isNaN(parseFloat(p))) return { price: parseFloat(p), name: d?.name || null };
+  } catch (err) {}
   return null;
 }
 
-
+async function fetchItopyaViaApi(url) {
+  try {
+    const res = await axios.get(url, {
+      timeout: 12000,
+      headers: { "User-Agent": getRandomUA() }
+    });
+    const $ = cheerio.load(res.data);
+    
+    const name = $("h1").first().text().trim();
+    let price = null;
+    
+    const ldJson = $('script[type="application/ld+json"]').html();
+    if (ldJson) {
+      try {
+        const parsed = JSON.parse(ldJson);
+        const offers = parsed.offers || (parsed['@graph']?.find(x => x.offers)?.offers);
+        price = offers?.price || offers?.lowPrice || (Array.isArray(offers) ? offers[0].price : null);
+      } catch(e) {}
+    }
+    
+    if (!price) {
+      price = $(".product-price").first().text();
+    }
+    
+    price = parsePrice(price);
+    if (price) return { price, name };
+  } catch(e) {}
+  return null;
+}
 
 function detectPlatform(url) {
-  const lowerUrl = url.toLowerCase();
-  if (lowerUrl.includes("trendyol.com") || lowerUrl.includes("ty.gl")) return "trendyol";
-  if (lowerUrl.includes("hepsiburada.com")) return "hepsiburada";
-  if (lowerUrl.includes("n11.com")) return "n11";
-  if (lowerUrl.includes("amazon.com.tr") || lowerUrl.includes("amazon.com")) return "amazon";
-  if (lowerUrl.includes("dolap.com")) return "dolap";
-  if (lowerUrl.includes("itopya.com")) return "itopya";
-  if (lowerUrl.includes("roboristan.com")) return "roboristan";
-  if (lowerUrl.includes("vatanbilgisayar.com")) return "vatanbilgisayar";
-  if (lowerUrl.includes("teknosa.com")) return "teknosa";
-  if (lowerUrl.includes("mediamarkt.com.tr")) return "mediamarkt";
-  if (lowerUrl.includes("pttav.com")) return "pttav";
-  if (lowerUrl.includes("pazarama.com")) return "pazarama";
+  const l = url.toLowerCase();
+  if (l.includes("trendyol.com") || l.includes("ty.gl")) return "trendyol";
+  if (l.includes("hepsiburada.com")) return "hepsiburada";
+  if (l.includes("n11.com")) return "n11";
+  if (l.includes("amazon.com")) return "amazon";
   return "generic";
 }
 
 async function expandUrl(url) {
-  if (url.includes("ty.gl") || url.includes("bit.ly") || url.includes("t.co")) {
+  if (url.includes("ty.gl") || url.includes("bit.ly")) {
     try {
-      const response = await axios.get(url, { maxRedirects: 5, validateStatus: null });
-      return response.request.res.responseUrl || url;
-    } catch (err) {
-      return url;
-    }
+      const res = await axios.get(url, { maxRedirects: 5, validateStatus: null });
+      return res.request.res.responseUrl || url;
+    } catch (err) { return url; }
   }
   return url;
 }
 
-function getPriceSelectors(platform) {
-  const map = {
-    trendyol: [
-      'meta[itemprop="price"]',
-      "[data-testid='price-label']",
-      ".prc-dsc",
-      ".product-detail-price .prc-dsc",
-      ".product-price-container .prc-dsc",
-      ".pr-bx-nm .prc-dsc",
-      ".prc-slg",
-      ".merchant-box .prc-dsc",
-    ],
-    hepsiburada: [
-      'script[type="application/ld+json"]', // Deep search first
-      "[data-test-id='price-current-price']",
-      "[data-test-id='price-label']",
-      "span[class*='finalPrice']",
-      "span[id*='offering-price']",
-      "span[class*='product-price']",
-      ".product-price",
-      "div[class*='price'] span",
-      ".price-value",
-      "[itemprop='price']"
-    ],
-    n11: [
-      ".newPrice ins",
-      ".priceDetail .newPrice ins",
-      ".fiyat ins",
-      ".productPrice ins",
-      ".product-price ins",
-      "span.price",
-      ".boxPrice ins",
-    ],
-    amazon: [
-      ".a-price .a-offscreen",
-      "#priceblock_ourprice",
-      "#corePrice_feature_div .a-price .a-offscreen",
-      "#apex_desktop .a-price .a-offscreen",
-      "#price_inside_buybox",
-      "#newBuyBoxPrice",
-      ".a-price-whole",
-      "#corePrice_full_Price .a-price-whole",
-      "span.a-price-whole",
-    ],
-    dolap: [
-      ".product-price",
-      "[class*='price']",
-      ".listing-price",
-      "span[class*='Price']",
-    ],
-    itopya: [
-      ".product-detail-current-price",
-      ".price-new",
-      "span[class*='price']",
-      ".product-price",
-      "[class*='currentPrice']",
-      "[itemprop='price']",
-      ".pdp-price",
-    ],
-    roboristan: [
-      ".product-price",
-      ".price-tag",
-      "span[class*='price']",
-      ".product-detail-price",
-      "[itemprop='price']",
-      ".current-price",
-      ".pdp-price",
-    ],
-    vatanbilgisayar: [
-      ".product-price",
-      ".price_tag",
-      "span.red",
-      "div[class*='productPrice']",
-      "[itemprop='price']",
-    ],
-    teknosa: [
-      ".product-page-price .price",
-      ".product-final-price",
-      "span[class*='price']",
-      "[itemprop='price']",
-    ],
-    mediamarkt: [
-      "[class*='StyledPrice']",
-      "[data-testid='product-price']",
-      ".price-display",
-      "[itemprop='price']",
-    ],
-    pttav: [
-      ".product-price",
-      "[class*='price']",
-      "[itemprop='price']",
-    ],
-    pazarama: [
-      ".product-price",
-      "[class*='price']",
-      "[itemprop='price']",
-    ],
-    generic: [
-      "[itemprop='price']",
-      "meta[itemprop='price']",
-      "[class*='price']",
-      "[class*='fiyat']",
-      "[class*='Price']",
-    ],
-  };
-  return map[platform] || map.generic;
-}
-
-function getNameSelectors(platform) {
-  const map = {
-    trendyol: [
-      "h1.pr-new-br",
-      ".pr-new-br span[title]",
-      "h1.pr-new-br span",
-      "[data-testid='product-title']",
-      "h1[class*='product']",
-      "h1",
-      ".product-name",
-    ],
-    hepsiburada: ["h1[class*='product']", "h1[itemprop='name']", "h1"],
-    n11: ["h1[class*='product']", ".product-title h1", "h1"],
-    amazon: ["#productTitle", "h1.a-size-large", "h1"],
-    itopya: ["h1[class*='product']", "h1[class*='title']", "h1"],
-    roboristan: ["h1[class*='product']", "h1[class*='title']", "h1"],
-    generic: ["h1", "[itemprop='name']", "[class*='product-name']", "[class*='productName']", "title"],
-  };
-  return map[platform] || map.generic;
-}
-
 function parsePrice(raw) {
   if (!raw) return null;
-  raw = String(raw).trim().toLowerCase();
-  raw = raw.replace(/[tl|₺|€|$|usd|eur|\s]/g, "");
-
+  raw = String(raw).trim().toLowerCase().replace(/[tl|₺|€|$|usd|eur|\s]/g, "");
   if (raw.includes(".") && !raw.includes(",")) {
     const parts = raw.split(".");
-    if (parts.length > 1 && parts[parts.length - 1].length === 3) {
-      raw = raw.replace(/\./g, "");
-    }
+    if (parts.length > 1 && parts[parts.length - 1].length === 3) raw = raw.replace(/\./g, "");
   }
-
   if (raw.includes(",") && raw.includes(".")) {
-    if (raw.indexOf(".") < raw.indexOf(",")) {
-      raw = raw.replace(/\./g, "").replace(",", ".");
-    } else {
-      raw = raw.replace(/,/g, "");
-    }
-  }
-  else if (raw.includes(",") && !raw.includes(".")) {
-    raw = raw.replace(",", ".");
-  }
-
+    if (raw.indexOf(".") < raw.indexOf(",")) raw = raw.replace(/\./g, "").replace(",", ".");
+    else raw = raw.replace(/,/g, "");
+  } else if (raw.includes(",") && !raw.includes(".")) raw = raw.replace(",", ".");
   const val = parseFloat(raw);
-  if (isNaN(val) || val <= 0) return null;
-  return val;
-}
-
-async function openPage(browser, url) {
-  const page = await browser.newPage();
-  const platform = detectPlatform(url);
-
-  await page.setViewport({ width: 1366 + Math.floor(Math.random() * 200), height: 768 + Math.floor(Math.random() * 200) });
-  await page.setUserAgent(getRandomUA());
-
-  // Gerçek tarayıcı gibi görünmek için navigator özellikleri
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-    Object.defineProperty(navigator, 'languages', { get: () => ['tr-TR', 'tr', 'en-US'] });
-    window.chrome = { runtime: {} };
-  });
-
-  await page.setExtraHTTPHeaders({
-    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Referer": "https://www.google.com/",
-    "sec-ch-ua": `"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"`,
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": `"Windows"`,
-    "sec-fetch-dest": "document",
-    "sec-fetch-mode": "navigate",
-    "sec-fetch-site": "none",
-  });
-
-  if (platform === "hepsiburada") {
-    await page.setCookie(
-      { name: "hb_login", value: "false", domain: ".hepsiburada.com" },
-      { name: "locale", value: "tr", domain: ".hepsiburada.com" }
-    );
-  }
-
-  await page.setRequestInterception(true);
-  page.on("request", (req) => {
-    const type = req.resourceType();
-    const reqUrl = req.url();
-    // CSS'i HİÇ engelleme — Trendyol, HB ve diğerleri fiyatı CSS ile render ediyor
-    if (
-      type === "image" ||
-      type === "media" ||
-      type === "font" ||
-      reqUrl.includes("google-analytics") ||
-      reqUrl.includes("googletagmanager") ||
-      reqUrl.includes("facebook.net") ||
-      reqUrl.includes("doubleclick") ||
-      reqUrl.includes("hotjar") ||
-      reqUrl.includes("pixel") ||
-      reqUrl.includes("clarity.ms") ||
-      reqUrl.includes("ads.")
-    ) {
-      req.abort();
-    } else {
-      req.continue();
-    }
-  });
-
-
-  const waitUntil = "domcontentloaded"; // Tüm platformlar için domcontentloaded - daha hızlı ve daha az bot tespiti
-  await page.goto(url, { waitUntil, timeout: 35000 });
-
-  if (platform === "trendyol") {
-    // Trendyol: price elementi gelene kadar bekle, gelmezse scroll + bekle
-    await page.waitForFunction(
-      () => document.querySelector('.prc-dsc') !== null || document.querySelector('[data-testid="price-label"]') !== null,
-      { timeout: 8000 }
-    ).catch(() => {});
-    await new Promise((r) => setTimeout(r, 1000));
-    await page.evaluate(() => window.scrollTo(0, 600));
-    await new Promise((r) => setTimeout(r, 1500));
-  } else if (platform === "hepsiburada") {
-    await new Promise((r) => setTimeout(r, 2000));
-    await page.evaluate(() => window.scrollTo(0, 600));
-    await new Promise((r) => setTimeout(r, 2500));
-  } else {
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-
-  await page.evaluate(() => window.scrollBy(0, 400));
-  return page;
-}
-
-
-async function extractFromPage(page, priceSelectors, nameSelectors, platform) {
-  return page.evaluate(
-    (priceSels, nameSels, plat) => {
-      let name = null;
-      if (plat === "trendyol") {
-        const trendyName =
-          document.querySelector(".pr-new-br") ||
-          document.querySelector(".product-h1-container h1") ||
-          document.querySelector("[data-testid='product-title']");
-        if (trendyName) name = trendyName.innerText.trim();
-      }
-
-      if (!name) {
-        const h1 = document.querySelector("h1");
-        if (h1 && h1.innerText.length > 5) name = h1.innerText.trim();
-      }
-
-      if (!name) {
-        name = document.title.split("-")[0].split("|")[0].trim();
-      }
-
-      if (!name) {
-        for (const sel of nameSels) {
-          const el = document.querySelector(sel);
-          if (el) {
-            const t = (el.innerText || el.textContent || el.getAttribute("content") || "").trim();
-            if (t && t.length > 3) {
-              name = t.substring(0, 100);
-              break;
-            }
-          }
-        }
-      }
-
-      let rawPrice = null;
-
-      try {
-        const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-        for (const script of scripts) {
-          const json = JSON.parse(script.innerText);
-          const items = Array.isArray(json) ? json : [json];
-          for (const item of items) {
-            if (item?.offers?.price) { rawPrice = item.offers.price; break; }
-            if (item?.price) { rawPrice = item.price; break; }
-          }
-          if (rawPrice) break;
-        }
-      } catch (e) {}
-
-      if (!rawPrice) {
-        const metaPrice = document.querySelector("meta[itemprop='price']");
-        if (metaPrice) rawPrice = metaPrice.getAttribute("content");
-      }
-
-      if (!rawPrice) {
-        for (const sel of priceSels) {
-          const el = document.querySelector(sel);
-          if (el) {
-            const text = (
-              el.tagName === "META"
-                ? el.getAttribute("content")
-                : el.innerText || el.textContent || el.getAttribute("content") || ""
-            ).trim();
-            if (text && text.length > 0 && /\d/.test(text)) {
-              rawPrice = text;
-              break;
-            }
-          }
-        }
-      }
-
-      const bodyText = (document.body.innerText || "").toLowerCase();
-      const outOfStockKeywords = ["stokta yok", "tükendi", "satışta değil", "out of stock"];
-      const inStock = !outOfStockKeywords.some((k) => bodyText.includes(k));
-
-      return { rawPrice, name, inStock };
-    },
-    priceSelectors,
-    nameSelectors,
-    platform
-  );
+  return (isNaN(val) || val <= 0) ? null : val;
 }
 
 async function getPrice(url) {
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error("Global timeout")), PAGE_TIMEOUT_MS)
-  );
-  
-  try {
-    return await Promise.race([_getPrice(url), timeoutPromise]);
-  } catch (err) {
-    console.error(`[SCRAPER ERROR] getPrice timeout/error: ${err.message}`);
+  if (activeUrls.has(url)) {
+    if (!isProd) console.log(`[PRO] Skipping duplicate: ${url.substring(0, 40)}`);
     return null;
+  }
+  if (scrapeCache.has(url)) {
+    const { data, time } = scrapeCache.get(url);
+    if (Date.now() - time < CACHE_TTL) return data;
+  }
+  
+  activeUrls.add(url);
+  try {
+    for (let i = 0; i < 2; i++) {
+      try {
+        const res = await Promise.race([_getPrice(url), new Promise((_, r) => setTimeout(() => r(new Error("Global timeout")), PAGE_TIMEOUT_MS))]);
+        if (res !== null) {
+          scrapeCache.set(url, { data: res, time: Date.now() });
+          stats.success++;
+          return res;
+        }
+        throw new Error("Null price");
+      } catch (err) {
+        stats.fail++;
+        if (i === 1) throw err;
+        await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      }
+    }
+  } catch (err) {
+    return null;
+  } finally {
+    activeUrls.delete(url);
   }
 }
 
 async function _getPrice(url) {
   url = await expandUrl(url);
-  const platform = detectPlatform(url);
+  const plat = detectPlatform(url);
 
-  // ─── Hepsiburada: Önce API dene (Puppeteer açma) ───
-  if (platform === "hepsiburada") {
-    const apiResult = await fetchHepsiburadaViaApi(url);
-    if (apiResult && apiResult.price) {
-      console.log(`[HB] ✅ API ile fiyat alındı.`);
-      return apiResult.price;
-    }
+  // CIRCUIT BREAKER
+  const fails = platformFailCount.get(plat) || 0;
+  if (fails > 5) {
+    console.warn(`[PRO] Circuit breaker for ${plat}, cooling off...`);
+    await new Promise(r => setTimeout(r, 60000));
+    platformFailCount.set(plat, 0);
   }
 
-  // ─── Trendyol: Önce API dene ───
-  if (platform === "trendyol") {
-    const apiResult = await fetchTrendyolViaApi(url);
-    if (apiResult && apiResult.price) {
-      console.log(`[TY] ✅ API ile fiyat alındı.`);
-      return apiResult.price;
-    }
-    console.warn(`[TY] API başarısız, Puppeteer fallback devreye giriyor...`);
+  if (plat === "hepsiburada") {
+    const api = await fetchHepsiburadaViaApi(url);
+    if (api?.price) return api.price;
+  }
+  if (plat === "trendyol") {
+    const api = await fetchTrendyolViaApi(url);
+    if (api?.price) return api.price;
+  }
+  if (url.includes("itopya.com")) {
+    const api = await fetchItopyaViaApi(url);
+    if (api?.price) return api.price;
   }
 
-  await waitForSlot();
+  let hasSlot = false;
   let page;
   try {
+    await waitForSlot();
+    hasSlot = true;
+    
     const browser = await getBrowser();
-    page = await openPage(browser, url);
+    page = await browser.newPage();
+    
+    // RESOURCE OPTIMIZATION: Block images, fonts, media
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (['image', 'font', 'media', 'stylesheet'].includes(type) && !url.includes('itopya')) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
-    const priceSelectors = getPriceSelectors(platform);
-    const nameSelectors = getNameSelectors(platform);
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.setUserAgent(getRandomUA());
+    
+    await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
 
-    const { rawPrice } = await extractFromPage(page, priceSelectors, nameSelectors, platform);
-    return parsePrice(rawPrice);
+    const html = await page.content();
+    if (html.includes("captcha") || html.includes("robot")) {
+      stats.blocks++;
+      throw new Error("BLOCKED");
+    }
+
+    try {
+      await page.waitForSelector('.prc-dsc, .product-price, [data-testid="price-label"], #product-price, .amount', { timeout: 4000 });
+    } catch(e) {}
+
+    const res = await page.evaluate(() => {
+      // 1. JSON-LD check (Most reliable)
+      try {
+        const ldTags = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const tag of ldTags) {
+          const data = JSON.parse(tag.innerText);
+          const offers = data.offers || data['@graph']?.find(x => x.offers)?.offers;
+          if (offers) {
+            const price = offers.price || offers.lowPrice || (Array.isArray(offers) ? offers[0].price : null);
+            if (price) return { rawPrice: String(price) };
+          }
+        }
+      } catch (e) {}
+
+      // 2. Selectors
+      const sels = [
+        '.prc-dsc', '.product-price', '.pr-bx-nm', 
+        "[data-testid='price-label']", 'span[class*="Price"]', 
+        '[itemprop="price"]', '.product-price', '.amount',
+        '#product-price', '.p-price'
+      ];
+      for (const s of sels) {
+        const el = document.querySelector(s);
+        if (el) return { rawPrice: el.innerText || el.textContent };
+      }
+      return { rawPrice: null };
+    });
+
+    const price = parsePrice(res.rawPrice);
+    if (price) platformFailCount.set(plat, 0);
+    return price;
+  } catch (err) {
+    platformFailCount.set(plat, (platformFailCount.get(plat) || 0) + 1);
+    throw err;
   } finally {
     if (page) await page.close().catch(() => {});
-    releaseSlot();
+    if (hasSlot) releaseSlot();
   }
 }
 
-
 async function getProductInfo(url) {
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error("Global timeout")), PAGE_TIMEOUT_MS)
-  );
-
+  if (activeUrls.has(url)) return { name: "Loading...", price: null, inStock: false, platform: "unknown" };
+  if (scrapeCache.has(url)) {
+    const { data, time } = scrapeCache.get(url);
+    if (Date.now() - time < CACHE_TTL) return data;
+  }
+  activeUrls.add(url);
   try {
-    return await Promise.race([_getProductInfo(url), timeoutPromise]);
+    for (let i = 0; i < 2; i++) {
+      try {
+        const res = await Promise.race([_getProductInfo(url), new Promise((_, r) => setTimeout(() => r(new Error("Global timeout")), PAGE_TIMEOUT_MS))]);
+        if (res?.price) {
+          scrapeCache.set(url, { data: res, time: Date.now() });
+          stats.success++;
+          return res;
+        }
+        throw new Error("Info missing");
+      } catch (err) {
+        stats.fail++;
+        if (i === 1) throw err;
+        await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      }
+    }
   } catch (err) {
-    console.error(`[SCRAPER ERROR] getProductInfo timeout/error: ${err.message}`);
-    return { name: "Bilinmiyor", price: null, inStock: false, platform: "unknown" };
+    return { name: "Unknown", price: null, inStock: false, platform: "unknown" };
+  } finally {
+    activeUrls.delete(url);
   }
 }
 
 async function _getProductInfo(url) {
   url = await expandUrl(url);
-  const platform = detectPlatform(url);
-
-  // ─── Hepsiburada: Önce API dene ───
-  if (platform === "hepsiburada") {
-    const apiResult = await fetchHepsiburadaViaApi(url);
-    if (apiResult && apiResult.price) {
-      console.log(`[HB] ✅ API ile ürün bilgisi alındı.`);
-      return {
-        name: apiResult.name || "Bilinmiyor",
-        price: apiResult.price,
-        inStock: true,
-        platform,
-      };
-    }
-    console.warn(`[HB] API başarısız, Puppeteer fallback devreye giriyor...`);
+  const plat = detectPlatform(url);
+  if (plat === "hepsiburada") {
+    const api = await fetchHepsiburadaViaApi(url);
+    if (api?.price) return { name: api.name || "Bilinmiyor", price: api.price, inStock: true, platform: plat };
+  }
+  if (plat === "trendyol") {
+    const api = await fetchTrendyolViaApi(url);
+    if (api?.price) return { name: api.name || "Bilinmiyor", price: api.price, inStock: true, platform: plat };
+  }
+  if (url.includes("itopya.com")) {
+    const api = await fetchItopyaViaApi(url);
+    if (api?.price) return { name: api.name || "Bilinmiyor", price: api.price, inStock: true, platform: "itopya" };
   }
 
-  // ─── Trendyol: Önce API dene ───
-  if (platform === "trendyol") {
-    const apiResult = await fetchTrendyolViaApi(url);
-    if (apiResult && apiResult.price) {
-      console.log(`[TY] ✅ API ile ürün bilgisi alındı, Puppeteer açılmadı.`);
-      return {
-        name: apiResult.name || "Bilinmiyor",
-        price: apiResult.price,
-        inStock: true,
-        platform,
-      };
-    }
-    console.warn(`[TY] API başarısız, Puppeteer fallback devreye giriyor...`);
-  }
-
-  await waitForSlot();
+  let hasSlot = false;
   let page;
   try {
+    await waitForSlot();
+    hasSlot = true;
+
     const browser = await getBrowser();
-    page = await openPage(browser, url);
+    page = await browser.newPage();
+    
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (['image', 'font', 'media', 'stylesheet'].includes(type)) req.abort();
+      else req.continue();
+    });
 
-    const priceSelectors = getPriceSelectors(platform);
-    const nameSelectors = getNameSelectors(platform);
+    await page.setUserAgent(getRandomUA());
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
+    
+    if ((await page.content()).includes("captcha")) throw new Error("BLOCKED");
 
-    const { rawPrice, name, inStock } = await extractFromPage(page, priceSelectors, nameSelectors, platform);
+    try {
+      await page.waitForSelector('.prc-dsc, .product-price, [data-testid="price-label"], #product-price, .amount', { timeout: 4000 });
+    } catch(e) {}
 
-    let price = parsePrice(rawPrice);
+    const data = await page.evaluate(() => {
+      const name = document.querySelector("h1")?.innerText?.trim();
+      
+      // JSON-LD
+      let ldPrice = null;
+      try {
+        const ldTags = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const tag of ldTags) {
+          const d = JSON.parse(tag.innerText);
+          const offers = d.offers || d['@graph']?.find(x => x.offers)?.offers;
+          if (offers) {
+            ldPrice = offers.price || offers.lowPrice || (Array.isArray(offers) ? offers[0].price : null);
+            if (ldPrice) break;
+          }
+        }
+      } catch (e) {}
 
-    if (!price) {
-      const html = await page.content();
-      const aiPrice = await ai.extractPriceAI(html);
-      if (aiPrice) price = aiPrice;
-    }
+      const priceEl = document.querySelector('.prc-dsc') || document.querySelector('span[class*="Price"]') || document.querySelector('.product-price');
+      return { name, rawPrice: ldPrice || priceEl?.innerText || priceEl?.textContent };
+    });
 
-    return {
-      name: name || "Bilinmiyor",
-      price,
-      inStock,
-      platform,
-    };
+    let price = parsePrice(data.rawPrice);
+
+    return { name: data.name || "Bilinmiyor", price, inStock: true, platform: plat };
   } finally {
     if (page) await page.close().catch(() => {});
-    releaseSlot();
+    if (hasSlot) releaseSlot();
   }
 }
+
+process.on("SIGINT", async () => {
+  if (_browser) { try { await _browser.close(); } catch (_) {} }
+  process.exit(0);
+});
 
 module.exports = { getPrice, getProductInfo, parsePrice, detectPlatform };
