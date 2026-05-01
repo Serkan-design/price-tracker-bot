@@ -1,5 +1,17 @@
 require("dotenv").config();
 const express = require("express");
+
+// ─── GLOBAL ERROR HANDLERS (CRASH PREVENTER) ─────────────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught Exception:", err.message);
+  // Do not exit, keep the engine running
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] Unhandled Rejection at:", promise, "reason:", reason);
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
@@ -113,7 +125,7 @@ xauusd.setAlertCallback(async (type, data) => {
   }
 });
 
-xauusd.startPolling(5_000);
+xauusd.startPolling(15_000); // Yeni engine 10-15sn kendi schedule eder, interval ignored
 
 app.use(cors());
 app.use(express.json());
@@ -222,14 +234,47 @@ app.post("/api/xauusd/reset-demo", authenticate, (req, res) => {
 });
 
 app.post("/api/xauusd/manual-trade", authenticate, async (req, res) => {
-  const { type } = req.body;
+  const { type } = req.body; // 'BUY' or 'SELL'
   const analysis = xauusd.getAnalysis();
-  if (!analysis) return res.status(503).json({ message: "Veri bekleniyor" });
+  if (!analysis) return res.status(503).json({ message: "Veri bekleniyor..." });
   
-  const result = xauusd.openPosition(type || 'BUY', analysis.price);
-  if (result.success) res.json({ message: result.message });
+  // Manuel işlemde de strateji kontrolü yapalım (opsiyonel ama user istedi)
+  // Eğer kullanıcı 'BUY' istiyorsa ama RSI > 70 ise engelleyelim.
+  if (type === 'BUY' && analysis.rsi >= 70) {
+    return res.status(400).json({ message: `Aşırı alım (RSI=${analysis.rsi}) bölgesinde BUY açamazsınız!` });
+  }
+  if (type === 'SELL' && analysis.rsi <= 30) {
+    return res.status(400).json({ message: `Aşırı satım (RSI=${analysis.rsi}) bölgesinde SELL açamazsınız!` });
+  }
+
+  const result = xauusd.openPosition(type || 'BUY', analysis.price, "Manuel İşlem");
+  if (result.success) res.json({ message: "Pozisyon başarıyla açıldı." });
   else res.status(400).json({ message: result.message });
 });
+
+// ─── YENİ ENGINE ENDPOINT'LERİ ───────────────────────────────────────────────
+
+app.get("/api/xauusd/positions", authenticate, (req, res) => {
+  res.json(xauusd.getPositions());
+});
+
+app.get("/api/xauusd/engine-state", authenticate, (req, res) => {
+  res.json(xauusd.engineStatus());
+});
+
+app.post("/api/xauusd/engine-toggle", authenticate, (req, res) => {
+  const result = xauusd.toggleEngine();
+  res.json({ message: result.isRunning ? 'Motor başlatıldı' : 'Motor durduruldu', ...result });
+});
+
+app.post("/api/xauusd/close-all", authenticate, async (req, res) => {
+  const analysis = xauusd.getAnalysis();
+  if (!analysis) return res.status(503).json({ message: 'Fiyat verisi yok' });
+  const result = xauusd.manualCloseAll(analysis.price);
+  res.json({ message: `${result.closed} pozisyon kapatıldı`, ...result });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 app.post("/api/xauusd/close-position", authenticate, async (req, res) => {
   const analysis = xauusd.getAnalysis();
@@ -259,14 +304,14 @@ app.post("/api/login", async (req, res) => {
       const adminEmail = process.env.ADMIN_EMAIL || "admin@fiyatbot.com";
       const adminUser = (email === adminEmail || !email) ? { email: email || adminEmail, name: "Yönetici" } : null;
       if (adminUser) {
-        const token = jwt.sign(adminUser, JWT_SECRET, { expiresIn: "7d" });
+        const token = jwt.sign(adminUser, JWT_SECRET, { expiresIn: "30d" });
         return res.json({ token, user: adminUser });
       }
     }
     if (!email) return res.status(400).json({ message: "E-posta gerekli" });
     const user = await db.loginUser(email, password);
     if (!user) return res.status(401).json({ message: "Hatalı giriş" });
-    const token = jwt.sign({ email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, user: { email: user.email, name: user.name } });
   } catch (err) {
     console.error("[LOGIN ERROR]", err);

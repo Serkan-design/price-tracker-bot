@@ -59,10 +59,12 @@ const Auth = ({ onLogin }) => {
         }, 200)
       }
     } catch (err) {
+      console.error("Login Error Full:", err);
       if (!err.response) {
-        setError(humanizeError(null));
+        setError(humanizeError(err.message || null));
       } else {
-        setError(humanizeError(err.response?.data?.message || 'Bir hata oluştu'));
+        const serverMsg = err.response?.data?.message || err.response?.data || `HTTP ${err.response.status}: Bir hata oluştu`;
+        setError(humanizeError(serverMsg));
       }
     } finally {
       setLoading(false)
